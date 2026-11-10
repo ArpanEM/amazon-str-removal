@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#10264a">
+  <title>Amazon STR & Removal Control Tower | Emami</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <div id="loginView" class="login-wrap">
+    <div class="login-card">
+      <div class="brand-mark">E</div>
+      <p class="eyebrow">EMAMI LIMITED</p>
+      <h1>Amazon STR &<br>Removal Control Tower</h1>
+      <p class="muted">Sign in to manage removals, receipts, fees and reconciliation.</p>
+      <label>Email<input id="loginEmail" type="email" autocomplete="username" placeholder="name@company.com"></label>
+      <label>Password<input id="loginPassword" type="password" autocomplete="current-password" placeholder="Password"></label>
+      <button id="loginBtn" class="primary full">Sign in</button>
+      <p id="loginMsg" class="message"></p>
+      <p class="tiny">First-time setup: create the Supabase project and follow README.md.</p>
+    </div>
+  </div>
+
+  <div id="appView" class="app hidden">
+    <aside class="sidebar">
+      <div class="side-brand"><div class="brand-mark small">E</div><div><b>EMAMI</b><small>CONTROL TOWER</small></div></div>
+      <div class="side-caption">WORKSPACE</div>
+      <nav id="nav">
+        <button class="nav-item active" data-page="dashboard">▦ <span>Dashboard</span></button>
+        <button class="nav-item" data-page="orders">▤ <span>Removal Orders</span></button>
+        <button class="nav-item" data-page="shipments">⇄ <span>Shipment Tracker</span></button>
+        <button class="nav-item" data-page="receipts">▣ <span>Warehouse Receipts</span></button>
+        <button class="nav-item" data-page="fees">₹ <span>Amazon Removal Fees</span></button>
+        <button class="nav-item" data-page="sap">⇧ <span>SAP Upload & Match</span></button>
+        <button class="nav-item" data-page="claims">⚑ <span>Amazon Claims</span></button>
+        <button class="nav-item" data-page="reports">▥ <span>Reports & Imports</span></button>
+        <button class="nav-item admin-only" data-page="employees">♙ <span>Employees</span></button>
+        <button class="nav-item admin-only" data-page="audit">◷ <span>Audit Logs</span></button>
+      </nav>
+      <div class="side-bottom"><span class="online-dot"></span> Supabase connected <button id="logoutBtn" class="logout">Sign out</button></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div><div class="eyebrow">OPERATIONS / AMAZON</div><h2 id="pageTitle">Dashboard</h2></div>
+        <div class="top-controls">
+          <select id="fyFilter" aria-label="Financial year"><option value="all">All financial years</option><option>2026-27</option><option>2025-26</option></select>
+          <select id="monthFilter" aria-label="Month"><option value="all">All months</option></select>
+          <div class="user-chip"><span class="avatar" id="userInitial">U</span><span><b id="userName">User</b><small id="userRole">Employee</small></span></div>
+        </div>
+      </header>
+
+      <section id="dashboardPage" class="page">
+        <div class="welcome-row"><div><h1>Removal performance overview</h1><p class="muted">Track, reconcile and control Amazon removal operations.</p></div><button class="primary" data-goto="reports">＋ Import reports</button></div>
+        <div class="kpi-grid">
+          <article class="kpi"><span>Total removal orders</span><b id="kpiOrders">0</b><small>Unique Amazon removal orders</small></article>
+          <article class="kpi"><span>Shipped quantity</span><b id="kpiShipped">0</b><small>From shipment detail</small></article>
+          <article class="kpi"><span>Physically received</span><b id="kpiReceived">0</b><small>Good + damaged + expiry categories</small></article>
+          <article class="kpi"><span>Pending receipt</span><b id="kpiPending">0</b><small>Awaiting final allocation</small></article>
+          <article class="kpi"><span>Amazon removal fees</span><b id="kpiFees">₹0.00</b><small>Actual Amazon-reported fees only</small></article>
+          <article class="kpi"><span>Open claims</span><b id="kpiClaims">0</b><small>Not closed</small></article>
+        </div>
+        <div class="grid-two">
+          <article class="panel"><div class="panel-head"><div><h3>Monthly shipment vs receipt</h3><p class="muted">Shipment and receipt dates are counted separately.</p></div></div><canvas id="trendChart" height="115"></canvas></article>
+          <article class="panel"><div class="panel-head"><div><h3>Warehouse receipt status</h3><p class="muted">Final quantity allocation</p></div></div><div class="status-list" id="statusBreakdown"></div></article>
+        </div>
+        <div class="grid-two">
+          <article class="panel"><div class="panel-head"><h3>Monthly control summary</h3><span class="muted">Selected period</span></div><div class="table-wrap"><table><thead><tr><th>Metric</th><th>Quantity / Amount</th></tr></thead><tbody id="summaryTable"></tbody></table></div></article>
+          <article class="panel"><div class="panel-head"><h3>Quick actions</h3></div><div class="quick-grid"><button data-goto="reports">⇧<span>Upload Amazon reports</span></button><button data-goto="receipts">▣<span>Update warehouse receipt</span></button><button data-goto="fees">₹<span>Upload removal fees</span></button><button data-goto="sap">⇄<span>Upload SAP export</span></button></div><div class="notice">Amazon removal fees are separate from inventory value and are never estimated by this system.</div></article>
+        </div>
+      </section>
+
+      <section id="ordersPage" class="page hidden"><div class="page-intro"><h1>Removal Orders</h1><p class="muted">Order-level summary imported from Amazon Removal Order Detail.</p></div><div class="toolbar"><input id="orderSearch" placeholder="Search order, SKU or FNSKU"><button class="secondary" data-goto="reports">Import order report</button></div><div class="panel table-wrap"><table><thead><tr><th>Order ID</th><th>SKU</th><th>FNSKU</th><th>Requested</th><th>Cancelled</th><th>Shipped</th><th>In process</th><th>Status</th></tr></thead><tbody id="ordersTable"></tbody></table></div></section>
+
+      <section id="shipmentsPage" class="page hidden"><div class="page-intro"><h1>Shipment Tracker</h1><p class="muted">One row per package/tracking line. Amazon tracking number is not treated as an internal shipment ID.</p></div><div class="toolbar"><input id="shipmentSearch" placeholder="Search order, tracking number, FNSKU"><button class="secondary" data-goto="reports">Import shipment detail</button></div><div class="panel table-wrap"><table><thead><tr><th>Internal ID</th><th>Order ID</th><th>Tracking number</th><th>FNSKU</th><th>Shipped qty</th><th>Amazon status</th><th>Shipment date</th></tr></thead><tbody id="shipmentsTable"></tbody></table></div></section>
+
+      <section id="receiptsPage" class="page hidden"><div class="page-intro"><h1>Warehouse Receipts</h1><p class="muted">Record final allocation for each shipment line. Amazon Delivered does not mean warehouse received.</p></div><div class="panel form-panel"><h3>Record receipt allocation</h3><form id="receiptForm" class="form-grid"><label>Internal shipment ID<input name="shipment_id" required placeholder="Internal shipment ID"></label><label>Good qty<input name="good_qty" type="number" min="0" value="0"></label><label>Damaged qty<input name="damaged_qty" type="number" min="0" value="0"></label><label>Near expiry qty<input name="near_expiry_qty" type="number" min="0" value="0"></label><label>Expired qty<input name="expired_qty" type="number" min="0" value="0"></label><label>Short qty<input name="short_qty" type="number" min="0" value="0"></label><label>Not received qty<input name="not_received_qty" type="number" min="0" value="0"></label><label>Receipt date<input name="receipt_date" type="date" required></label><label class="wide">Remarks<input name="remarks" placeholder="Optional notes"></label><button class="primary">Save receipt</button></form><p id="receiptMsg" class="message"></p></div><div class="panel table-wrap"><h3>Receipt reconciliation</h3><table><thead><tr><th>Shipment ID</th><th>Shipped</th><th>Physical received</th><th>Short</th><th>Not received</th><th>Pending</th></tr></thead><tbody id="receiptTable"></tbody></table></div></section>
+
+      <section id="feesPage" class="page hidden"><div class="page-intro"><h1>Amazon Removal Fees</h1><p class="muted">Only actual fees reported by Amazon for removal orders. No estimated charges.</p></div><div class="kpi-grid compact"><article class="kpi"><span>Total reported fees</span><b id="feeTotal">₹0.00</b></article><article class="kpi"><span>Fee records</span><b id="feeCount">0</b></article><article class="kpi"><span>Average fee per unit</span><b id="feePerUnit">—</b><small>Only when fee and quantity data are comparable</small></article></div><div class="panel form-panel"><h3>Import Amazon removal fee report</h3><p class="muted">Upload the Amazon report containing removal order reference and actual fee amount. Fees without a reliable removal-order reference will be placed in exceptions.</p><form id="feeUploadForm" class="form-grid"><label class="wide">Amazon fee CSV<input type="file" name="file" accept=".csv" required></label><label>Order ID column<input name="order_col" value="order-id" required></label><label>Fee amount column<input name="fee_col" value="fee-amount" required></label><label>Currency column<input name="currency_col" value="currency"></label><label>Fee date column<input name="date_col" value="posted-date"></label><button class="primary">Upload fee report</button></form><p id="feeMsg" class="message"></p></div><div class="panel table-wrap"><h3>Fee register</h3><table><thead><tr><th>Order ID</th><th>Amazon fee</th><th>Currency</th><th>Fee date</th><th>Source</th></tr></thead><tbody id="feesTable"></tbody></table></div></section>
+
+      <section id="sapPage" class="page hidden"><div class="page-intro"><h1>SAP Upload & Automatic Matching</h1><p class="muted">Manual exports only. No SAP API or live connection.</p></div><div class="notice">Upload SAP PO, Delivery, Invoice or MIGO exports. Matching uses available reference numbers and material codes. Ambiguous matches are never auto-approved.</div><div class="panel form-panel"><h3>Upload SAP export</h3><form id="sapForm" class="form-grid"><label>Document stage<select name="stage"><option>PO</option><option>Delivery</option><option>Invoice</option><option>MIGO</option></select></label><label>Export file<input name="file" type="file" accept=".csv,.xlsx,.xls" required></label><label class="wide">Notes<input name="notes" placeholder="Optional export details"></label><button class="primary">Upload & match</button></form><p id="sapMsg" class="message"></p></div><div class="panel table-wrap"><h3>Matching exceptions</h3><table><thead><tr><th>Uploaded stage</th><th>Reference</th><th>Material</th><th>Reason</th><th>Status</th><th>Action</th></tr></thead><tbody id="sapExceptions"></tbody></table></div><div class="panel table-wrap"><h3>SAP posting tracker</h3><table><thead><tr><th>Reference</th><th>Material</th><th>PO</th><th>Delivery</th><th>Invoice</th><th>MIGO</th><th>Last upload</th></tr></thead><tbody id="sapTable"></tbody></table></div></section>
+
+      <section id="claimsPage" class="page hidden"><div class="page-intro"><h1>Amazon Claims</h1><p class="muted">Track missing, damaged and disputed removal quantities.</p></div><div class="panel form-panel"><form id="claimForm" class="form-grid"><label>Removal order ID<input name="order_id" required></label><label>Claim reference<input name="claim_ref"></label><label>Claim type<select name="claim_type"><option>Missing units</option><option>Damaged units</option><option>Fee dispute</option><option>Other</option></select></label><label>Claim quantity<input name="quantity" type="number" min="0" value="0"></label><label>Status<select name="status"><option>Open</option><option>Submitted</option><option>Under review</option><option>Resolved</option><option>Closed</option></select></label><label>Amount (optional)<input name="amount" type="number" min="0" step="0.01"></label><label class="wide">Remarks<input name="remarks"></label><button class="primary">Save claim</button></form></div><div class="panel table-wrap"><table><thead><tr><th>Order</th><th>Claim ref</th><th>Type</th><th>Qty</th><th>Status</th><th>Amount</th></tr></thead><tbody id="claimsTable"></tbody></table></div></section>
+
+      <section id="reportsPage" class="page hidden"><div class="page-intro"><h1>Reports & Imports</h1><p class="muted">Import Amazon operational reports. STR import retains only Transaction Type = FC_REMOVAL.</p></div><div class="panel form-panel"><h3>Import Amazon report</h3><form id="amazonImportForm" class="form-grid"><label>Report type<select name="type"><option value="str">STR report</option><option value="orders">Removal Order Detail</option><option value="shipments">Removal Shipment Detail</option><option value="fee">Amazon Removal Fee report</option></select></label><label>CSV file<input name="file" type="file" accept=".csv" required></label><label class="wide">Optional import notes<input name="notes"></label><button class="primary">Upload and process</button></form><p id="importMsg" class="message"></p></div><div class="panel"><h3>Import rules</h3><ul class="rule-list"><li>STR: only <b>FC_REMOVAL</b> rows enter the operational STR register. FC_TRANSFER and FC_REMOVAL-Cancel are excluded.</li><li>Removal Order Detail and Shipment Detail remain separate sources.</li><li>Shipment rows retain Amazon tracking number and receive a generated internal shipment ID.</li><li>Duplicate source rows are flagged; tracking number alone is not a unique key.</li><li>Product mapping conflicts are sent to exceptions rather than choosing the first mapping.</li><li>Fee import is Amazon-removal-only and stores actual reported charges.</li></ul></div><div class="panel table-wrap"><h3>Recent imports</h3><table><thead><tr><th>File</th><th>Type</th><th>Rows read</th><th>Rows accepted</th><th>Imported by</th><th>Date</th></tr></thead><tbody id="importsTable"></tbody></table></div></section>
+
+      <section id="employeesPage" class="page hidden"><div class="page-intro"><h1>Employee Management</h1><p class="muted">Invite employees through Supabase Authentication, then assign their role.</p></div><div class="notice">Create the employee in Supabase → Authentication → Users. Once the user signs in for the first time, their profile appears here. Admin can change roles below.</div><div class="panel table-wrap"><table><thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Action</th></tr></thead><tbody id="employeesTable"></tbody></table></div></section>
+
+      <section id="auditPage" class="page hidden"><div class="page-intro"><h1>Audit Logs</h1><p class="muted">Trace uploads and changes made in the Control Tower.</p></div><div class="panel table-wrap"><table><thead><tr><th>Time</th><th>Employee</th><th>Action</th><th>Entity</th><th>Details</th></tr></thead><tbody id="auditTable"></tbody></table></div></section>
+      <footer>Amazon STR & Removal Control Tower <span>•</span> Internal operations tool</footer>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>
