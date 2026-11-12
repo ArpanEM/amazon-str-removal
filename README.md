@@ -62,13 +62,13 @@ Recommended initial upload order:
 1. Product Mapping Master Excel or CSV (upload the original `.xlsx`, `.xls` or `.csv` file).
 2. Removal Order Detail Excel or CSV.
 3. Removal Shipment Detail Excel or CSV.
-4. Amazon STR report Excel or CSV (only FC_REMOVAL rows will be stored). This same file is used for PO grouping and carries the SAP document reference columns.
+4. Amazon STR report Excel or CSV (only FC_REMOVAL rows will be stored). This same file is used for PO grouping and carries the SAP document reference columns. The `SKU` field is treated as the SAP Material Code; Material Description is not supplied and is displayed as blank.
 
 Removal fees are imported automatically during step 1 from the `removal-fee` and `currency` columns in the Removal Order Detail CSV. No separate fee report is available or needed.
 
 ### Excel / CSV upload and automatic mapping
 
-The import screen accepts `.xlsx`, `.xls` and `.csv` directly. Excel files are read in the browser using SheetJS; the first visible worksheet is imported. Do not convert Excel files manually. Upload the Product Mapping Master first. STR rows with blank SKU are retained: the app attempts unique mapping by source SKU, FNSKU, then ASIN. Shipment rows use available FNSKU, SKU and ASIN identifiers. If a key resolves to more than one distinct SKU/material combination, the row is marked `conflict` and no mapping is guessed. If no unique mapping exists, the source row remains stored with `unmapped` status and its original row data.
+The import screen accepts `.xlsx`, `.xls` and `.csv` directly. Excel files are read in the browser using SheetJS; the first visible worksheet is imported. Do not convert Excel files manually. The STR/SAP workbook is the reference source for PO Number, Delivery No, Billing Document and MIGO No. The SKU column is the SAP Material Code. Material Description is not available in the supplied source header, so it remains blank. Existing product mapping imports remain optional for enriching ASIN/FNSKU identifiers; they are not required to derive the SAP Material Code when SKU is present.
 
 The Recent Imports table now stores rejected-row counts and the first row-level error messages in Supabase, so the reason for a failed row remains visible after refresh.
 
@@ -98,11 +98,10 @@ Exact source columns used from the supplied header:
 - `Po Number`, `Delivery No`, `Billing Document`, `MIGO No`, `Status`
 
 PO grouping rules confirmed by the business user:
-1. `GOVT_ACCEPTED`: keep each Transaction ID as an individual PO group. All SKU lines belonging to that Transaction ID stay together in that group.
-2. `GOVT_REJECTED` and blank IRN status: consolidate together into one PO group per `Ship From Fc`, including all SKUs from that same location.
-3. Different Ship From FC values always produce different consolidated groups.
-4. A rejected/blank row with no Ship From FC is not silently consolidated; it appears in the review queue until the location is supplied.
-5. Original Transaction ID, Order ID, SKU, quantity, invoice and document references remain on the underlying STR lines for traceability.
+1. Keep each Transaction ID / Invoice reference as its own PO group, retaining all SKU lines associated with that transaction and invoice.
+2. Do not consolidate or split PO groups based on `GOVT_ACCEPTED`, `GOVT_REJECTED` or blank IRN status. IRN status remains a displayed source attribute only.
+3. PO Number, Delivery No, Billing Document and MIGO No are read from the STR/SAP Excel or CSV source columns. Missing values remain pending and are visible in the review queue.
+4. SKU is the SAP Material Code. Material Description is not present in the supplied header and remains blank.
 
 The PO grouping view is a preparation/tracking aid. Actual PO creation is still performed in SAP by the business team. After PO, Delivery, Billing and MIGO references are available, upload the refreshed Amazon STR report to update those columns in the tracker. The app does not infer missing document numbers or treat blank document references as completed.
 
@@ -122,7 +121,7 @@ This is a working starter project, not a certified production finance system. Be
 
 ## Existing database upgrade
 
-For an existing Control Tower installation, deploy the updated frontend files and run `excel_auto_mapping_migration.sql` once in Supabase SQL Editor. This additive migration allows blank STR SKU values, adds a stable source-line key and mapping status, and persists import rejection details. It preserves existing operational rows. Do not rerun `supabase_schema.sql` or the previously applied `str_po_logic_migration.sql`.
+For an existing Control Tower installation, deploy the updated frontend files in this package. This frontend revision uses the existing database columns and does not require a new SQL migration. Do not rerun `supabase_schema.sql` or previously applied migrations.
 
 ## Folder contents
 
@@ -140,7 +139,7 @@ For an existing Control Tower installation, deploy the updated frontend files an
 1. In Supabase SQL Editor, run `receipt_sku_mapping_migration.sql` before replacing the website files.
 2. Upload the original product mapping master workbook directly from Reports & Imports using report type **Product Mapping Master**; no CSV conversion or manual SKU mapping is required.
 3. Import Removal Order Detail first, then Removal Shipment Detail. The receipt selector now shows Order ID, SKU, FNSKU, tracking number and shipped quantity.
-4. Warehouse Receipt reconciliation displays SKU, FNSKU, Material Code, tracking number, shipped quantity, each receipt category, physical received, short, not received, pending allocation and mapping status.
+4. Warehouse Receipt reconciliation displays SKU/FNSKU, SAP Material Code (SKU), tracking number, shipped quantity, each receipt category, physical received, short, not received and pending allocation. Order and shipment trackers show SAP document references where a matching STR row exists. The report tables can be exported to `.xlsx` and respect the currently displayed month/year filters.
 5. FNSKU mapping (or SKU fallback when FNSKU is absent) is applied only when it resolves to one unique SKU/material combination. Conflicting or missing mappings remain flagged and are not silently assigned.
 
 Important: This is an incremental MVP correction, not a production certification. Existing shipment records will show mapped SKU/material dynamically from the mapping master where a unique match exists. The new database columns are used for future shipment imports. Validate Amazon source column names and mapping results with a small test import before bulk use. Duplicate shipment import prevention and a full exception-resolution workflow remain future hardening items.
