@@ -29,7 +29,7 @@ A self-managed static web app for GitHub Pages + Supabase. It is designed for mu
 1. Create a project at https://supabase.com.
 2. Open **SQL Editor** and run all of `supabase_schema.sql` only for a brand-new database. For your existing database, do NOT rerun the original schema or the already-applied migrations. Run the new `excel_auto_mapping_migration.sql` exactly once.
 3. Go to **Project Settings → API** and copy Project URL and `anon` public key.
-4. Copy `config.example.js` to `config.js` and replace the placeholders.
+4. Edit `config.js` and paste your Project URL and `anon` public key. Never paste the `service_role` key.
 5. Never put the Supabase `service_role` key in browser code or GitHub.
 
 ## 2. Bootstrap the first admin
@@ -54,7 +54,7 @@ Create other employees under **Authentication → Users**. Their profiles are cr
 4. Open the published URL. Use HTTPS.
 5. Supabase Authentication → URL Configuration: set Site URL to the GitHub Pages URL and add it to Redirect URLs.
 
-**Security note:** GitHub Pages is static hosting. The Supabase anon key is visible in browser source by design; database security depends on correctly configured Row Level Security. This starter's operational policies allow authenticated employees broad read/insert/update access. Before production, tighten write policies by role and test with separate employee accounts. Never use the service-role key in the frontend.
+**Security note:** GitHub Pages is static hosting. The Supabase anon key is visible in browser source by design; database security depends on Row Level Security. Permissions are set by `supabase_fix.sql` (see the Security update section).
 
 ## 4. Import order
 
@@ -119,6 +119,50 @@ This is a working starter project, not a certified production finance system. Be
 - Add source file storage upload if retention of original reports is required.
 - Back up Supabase regularly and restrict GitHub repository access.
 
+## Security update: permissions and duplicate protection (read first)
+
+This update changes how employees, managers and admins can work with data. Follow these steps in order.
+
+### Step 1: Back up your data (Free plan)
+The Supabase Free plan does not include automatic backups. Before running the SQL, export your data:
+- In **Table Editor**, open each table and use **Export** (CSV), or run `select * from public.<table>;` in the SQL Editor and save the result.
+- Tables to export: `removal_orders`, `shipment_lines`, `warehouse_receipts`, `amazon_removal_fees`, `amazon_claims`, `str_records`, `import_batches`, `product_mappings`, `sap_postings`.
+
+### Step 2: Turn off public sign-ups
+In Supabase, go to **Authentication → Sign In / Providers** and turn off **Allow new users to sign up**. Add employees yourself through **Authentication → Users → Invite user**. Anyone who can sign up gets access to the data, so this step matters.
+
+### Step 3: Run the SQL once
+Open **SQL Editor**, paste the full contents of `supabase_fix.sql`, and run it. Do not re-run the original schema or the earlier four migrations, which are already applied.
+- If the script shows "STOPPED. Duplicate ... exist", nothing has been changed. Copy the message and send it to your developer.
+- At the end, the CHECK query lists the policies now in force. Each operational table should show `update managers` and `delete managers`, and no `update authenticated`.
+
+### Step 4: Upload the updated files
+Upload `app.js`, `index.html`, `supabase_fix.sql` and `README.md` to the GitHub repository, replacing the old copies. Wait for GitHub Pages to rebuild, then open the app and press Ctrl+F5 (or Cmd+Shift+R on Mac) to clear the old script from the browser cache.
+
+### Step 5: Test with a non-admin account
+Sign in as an employee account and check:
+1. You can view all pages, and you can save a warehouse receipt.
+2. The Employees page shows roles as "View only" (no dropdown).
+3. Re-importing a file that contains existing rows reports them as "Already present and skipped", not as errors.
+4. Editing or deleting an existing record in Supabase fails with a permission message.
+5. Signing in as a manager or admin, the same re-import updates existing rows, and the Employees page shows the role dropdown (admin only).
+
+### Permissions after this update
+
+| Action | Employee | Manager / Admin |
+|---|---|---|
+| View all records | Yes | Yes |
+| Add records (imports, receipts, claims) | Yes | Yes |
+| Re-import an existing row (updates it) | No: skipped and reported | Yes |
+| Edit or delete records | No | Yes |
+| Change roles | No | Admin only |
+| View audit log, employees, uploaded source reports | No | Yes |
+
+### What this update does not change yet
+- **STR upload key.** STR rows are still identified by the older key, which includes the row position in the file. Changing it now would insert your existing STR rows again. This will be handled in a separate step after a duplicate review. Until then, after each STR upload run the read-only check at the end of `supabase_fix.sql`.
+- **Audit log size.** Every insert, update and delete is logged. Large imports create many audit entries.
+- **Duplicate protection on imports.** Shipments and removal fees are identified by order, tracking number, SKU and FNSKU (shipments) or order, SKU and FNSKU (fees), so the same line cannot be added twice. Fee rows are no longer separated by filename.
+
 ## Existing database upgrade
 
 For an existing Control Tower installation, deploy the updated frontend files in this package. This frontend revision uses the existing database columns and does not require a new SQL migration. Do not rerun `supabase_schema.sql` or previously applied migrations.
@@ -128,7 +172,8 @@ For an existing Control Tower installation, deploy the updated frontend files in
 - `index.html` — user interface
 - `styles.css` — responsive layout
 - `app.js` — Supabase client, imports, dashboard and workflows
-- `config.example.js` — configuration template
+- `config.js` — your Supabase URL and anon key (edit directly)
+- `supabase_fix.sql` — permissions, audit log and duplicate protection (run once)
 - `supabase_schema.sql` — database and RLS schema
 - `templates/amazon_str_template.csv` — exact Amazon STR header template, including the duplicate Ship From / Ship To SAP location headers.
 - `str_po_logic_migration.sql` — earlier STR/PO migration (already applied in this installation).
