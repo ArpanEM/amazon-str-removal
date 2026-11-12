@@ -27,7 +27,7 @@ A self-managed static web app for GitHub Pages + Supabase. It is designed for mu
 ## 1. Create Supabase project
 
 1. Create a project at https://supabase.com.
-2. Open **SQL Editor** and run all of `supabase_schema.sql`. If you already have a running database, run `removal_fee_migration.sql` once instead of rerunning the full schema.
+2. Open **SQL Editor** and run all of `supabase_schema.sql` only for a brand-new database. For your existing database, do NOT rerun the original schema or the already-applied migrations. Run the new `excel_auto_mapping_migration.sql` exactly once.
 3. Go to **Project Settings → API** and copy Project URL and `anon` public key.
 4. Copy `config.example.js` to `config.js` and replace the placeholders.
 5. Never put the Supabase `service_role` key in browser code or GitHub.
@@ -59,14 +59,20 @@ Create other employees under **Authentication → Users**. Their profiles are cr
 ## 4. Import order
 
 Recommended initial upload order:
-1. Removal Order Detail CSV.
-2. Removal Shipment Detail CSV.
-3. Product Mapping Master CSV.
-4. Amazon STR report CSV (only FC_REMOVAL rows will be stored). This same file is used for PO grouping and carries the SAP document reference columns.
+1. Product Mapping Master Excel or CSV (upload the original `.xlsx`, `.xls` or `.csv` file).
+2. Removal Order Detail Excel or CSV.
+3. Removal Shipment Detail Excel or CSV.
+4. Amazon STR report Excel or CSV (only FC_REMOVAL rows will be stored). This same file is used for PO grouping and carries the SAP document reference columns.
 
 Removal fees are imported automatically during step 1 from the `removal-fee` and `currency` columns in the Removal Order Detail CSV. No separate fee report is available or needed.
 
-### Amazon CSV mapping
+### Excel / CSV upload and automatic mapping
+
+The import screen accepts `.xlsx`, `.xls` and `.csv` directly. Excel files are read in the browser using SheetJS; the first visible worksheet is imported. Do not convert Excel files manually. Upload the Product Mapping Master first. STR rows with blank SKU are retained: the app attempts unique mapping by source SKU, FNSKU, then ASIN. Shipment rows use available FNSKU, SKU and ASIN identifiers. If a key resolves to more than one distinct SKU/material combination, the row is marked `conflict` and no mapping is guessed. If no unique mapping exists, the source row remains stored with `unmapped` status and its original row data.
+
+The Recent Imports table now stores rejected-row counts and the first row-level error messages in Supabase, so the reason for a failed row remains visible after refresh.
+
+### Amazon source column mapping
 
 The importer recognizes common Amazon headers such as:
 - Order: `order-id` / `order id` / `removal-order-id`
@@ -100,7 +106,7 @@ PO grouping rules confirmed by the business user:
 
 The PO grouping view is a preparation/tracking aid. Actual PO creation is still performed in SAP by the business team. After PO, Delivery, Billing and MIGO references are available, upload the refreshed Amazon STR report to update those columns in the tracker. The app does not infer missing document numbers or treat blank document references as completed.
 
-The CSV parser preserves duplicate source headers by assigning positional suffixes internally (for example, the first and second `SAP Storage location` columns remain distinct). The first storage location and plant columns are treated as Ship From values; the second duplicate columns remain in the original raw source row.
+The CSV parser preserves duplicate source headers by assigning positional suffixes internally. Excel imports use the first visible worksheet and preserve the source row data. The first storage location and plant columns are treated as Ship From values; the second duplicate columns remain in the original raw source row.
 
 ## 7. Current scope and known limitations
 
@@ -114,6 +120,10 @@ This is a working starter project, not a certified production finance system. Be
 - Add source file storage upload if retention of original reports is required.
 - Back up Supabase regularly and restrict GitHub repository access.
 
+## Existing database upgrade
+
+For an existing Control Tower installation, deploy the updated frontend files and run `excel_auto_mapping_migration.sql` once in Supabase SQL Editor. This additive migration allows blank STR SKU values, adds a stable source-line key and mapping status, and persists import rejection details. It preserves existing operational rows. Do not rerun `supabase_schema.sql` or the previously applied `str_po_logic_migration.sql`.
+
 ## Folder contents
 
 - `index.html` — user interface
@@ -122,12 +132,13 @@ This is a working starter project, not a certified production finance system. Be
 - `config.example.js` — configuration template
 - `supabase_schema.sql` — database and RLS schema
 - `templates/amazon_str_template.csv` — exact Amazon STR header template, including the duplicate Ship From / Ship To SAP location headers.
-- `str_po_logic_migration.sql` — adds STR columns and PO grouping keys to an existing Supabase database.
+- `str_po_logic_migration.sql` — earlier STR/PO migration (already applied in this installation).
+- `excel_auto_mapping_migration.sql` — new additive migration for direct Excel imports, blank-SKU STR rows, and persisted import errors.
 
 
 ## Revised SKU-wise Warehouse Receipt Tracker (v2)
 1. In Supabase SQL Editor, run `receipt_sku_mapping_migration.sql` before replacing the website files.
-2. Upload the product mapping master from Reports & Imports using report type **Product Mapping Master**. Use `templates/product_mapping_template.csv` as a header example; your Book8.xlsx export can be saved as CSV with its actual headers.
+2. Upload the original product mapping master workbook directly from Reports & Imports using report type **Product Mapping Master**; no CSV conversion or manual SKU mapping is required.
 3. Import Removal Order Detail first, then Removal Shipment Detail. The receipt selector now shows Order ID, SKU, FNSKU, tracking number and shipped quantity.
 4. Warehouse Receipt reconciliation displays SKU, FNSKU, Material Code, tracking number, shipped quantity, each receipt category, physical received, short, not received, pending allocation and mapping status.
 5. FNSKU mapping (or SKU fallback when FNSKU is absent) is applied only when it resolves to one unique SKU/material combination. Conflicting or missing mappings remain flagged and are not silently assigned.
