@@ -1,6 +1,6 @@
 # Amazon STR & Removal Control Tower — Emami
 
-A self-managed static web app for GitHub Pages + Supabase. It is designed for multiple employees and does **not** connect to SAP. Employees manually export SAP reports and upload them.
+A self-managed static web app for GitHub Pages + Supabase. It is designed for multiple employees and does **not** connect to SAP. The Amazon STR report is the source file for PO grouping and SAP document references.
 
 ## Included modules
 
@@ -9,8 +9,8 @@ A self-managed static web app for GitHub Pages + Supabase. It is designed for mu
 - Removal Order Detail register.
 - Removal Shipment Detail tracker, one row per package/tracking line. A generated internal database ID is distinct from Amazon's `tracking-number`.
 - Warehouse receipt allocation: Good, Damaged, Near Expiry, Expired, Short, Not Received.
-- Amazon Removal Fees: actual reported fees only, linked to known Amazon removal order IDs. No estimated rates and no product/inventory value KPI.
-- SAP PO, Delivery, Invoice and MIGO manual CSV uploads with reference/material matching. Ambiguous/unmatched lines require review.
+- Amazon Removal Fees: actual `removal-fee` and `currency` values are captured directly from Amazon Removal Order Detail, by order/SKU/FNSKU. No separate fee report is required.
+- PO grouping and SAP document tracker based on the Amazon STR source file. PO Number, Delivery No, Billing Document and MIGO No are read from that same STR file; no separate SAP upload is required.
 - Claims, import history, employee roles and audit logs.
 
 ## Important operating definitions
@@ -27,7 +27,7 @@ A self-managed static web app for GitHub Pages + Supabase. It is designed for mu
 ## 1. Create Supabase project
 
 1. Create a project at https://supabase.com.
-2. Open **SQL Editor** and run all of `supabase_schema.sql`.
+2. Open **SQL Editor** and run all of `supabase_schema.sql`. If you already have a running database, run `removal_fee_migration.sql` once instead of rerunning the full schema.
 3. Go to **Project Settings → API** and copy Project URL and `anon` public key.
 4. Copy `config.example.js` to `config.js` and replace the placeholders.
 5. Never put the Supabase `service_role` key in browser code or GitHub.
@@ -61,9 +61,10 @@ Create other employees under **Authentication → Users**. Their profiles are cr
 Recommended initial upload order:
 1. Removal Order Detail CSV.
 2. Removal Shipment Detail CSV.
-3. STR report CSV (only FC_REMOVAL rows will be stored).
-4. Amazon removal fee report CSV (after order IDs exist).
-5. SAP PO / Delivery / Invoice / MIGO exports as CSV.
+3. Product Mapping Master CSV.
+4. Amazon STR report CSV (only FC_REMOVAL rows will be stored). This same file is used for PO grouping and carries the SAP document reference columns.
+
+Removal fees are imported automatically during step 1 from the `removal-fee` and `currency` columns in the Removal Order Detail CSV. No separate fee report is available or needed.
 
 ### Amazon CSV mapping
 
@@ -79,24 +80,27 @@ If your export uses different column names, update the `pick()` aliases in `app.
 
 ## 5. Amazon removal fee logic
 
-Use the Amazon report's actual fee amount, currency, date and removal order ID. The import will skip fee lines that cannot be linked to an existing removal order. Do not load FBA storage, referral, selling, disposal or other non-removal charges into this table. If Amazon's report contains mixed fee types, filter to removal-related fee types before upload.
+The `Removal Order Detail` CSV is the source of truth. On import, the app reads `removal-fee` and `currency` from each row and stores nonblank fee lines linked to the same removal order, SKU and FNSKU. The report does not provide a separate fee-posted date, so the order request date is used for month filtering and is labelled Order date in the fee register. Blank fee/currency rows are ignored, not treated as zero. Re-importing the same report filename updates its existing order/SKU/FNSKU fee line rather than adding a duplicate. No fee is estimated from quantity.
 
-No fee is inferred from quantity. A blank fee remains absent; it is not converted to zero.
+## 6. PO grouping and SAP document tracking from Amazon STR
 
-## 6. SAP manual upload and matching
+The Amazon STR report is the source file used to prepare PO groups. The project does not connect to SAP and does not create SAP purchase orders automatically. It prepares the grouping view and tracks the SAP document references that are present in the same Amazon STR file.
 
-- No SAP integration/API exists in this app.
-- Download SAP exports manually and save as CSV.
-- Select PO, Delivery, Invoice or MIGO stage.
-- The starter parser looks for common reference and material headers (`PO`, `Delivery`, `Invoice`, `MIGO`, `Material`).
-- To make matching reliable, configure aliases to the actual SAP export column names and define the authoritative matching keys with your team. Recommended hierarchy:
-  1. PO + Material
-  2. Delivery + Material
-  3. Invoice + Material
-  4. MIGO document + Material
-- Do not auto-resolve ambiguous matches. Review exceptions manually.
+Exact source columns used from the supplied header:
+- `Transaction Type` (only `FC_REMOVAL` accepted)
+- `Transaction Id`, `Order Id`, `Ship From Fc`, `Invoice Number`, `Invoice Date`, `Asin`, `Sku`, `Quantity`, `ACTUAL QTY`, `Invoice Quantity`, `Hsn Code`, `Irn Filing Status`
+- `Po Number`, `Delivery No`, `Billing Document`, `MIGO No`, `Status`
 
-**Important limitation:** The current starter persists parsed SAP reference rows and provides the tracker structure, but it does not yet implement a fully validated cross-document exception workflow or exact SAP-specific matching for your company exports. Sample PO, Delivery, Invoice and MIGO files are required to finish that mapping accurately.
+PO grouping rules confirmed by the business user:
+1. `GOVT_ACCEPTED`: keep each Transaction ID as an individual PO group. All SKU lines belonging to that Transaction ID stay together in that group.
+2. `GOVT_REJECTED` and blank IRN status: consolidate together into one PO group per `Ship From Fc`, including all SKUs from that same location.
+3. Different Ship From FC values always produce different consolidated groups.
+4. A rejected/blank row with no Ship From FC is not silently consolidated; it appears in the review queue until the location is supplied.
+5. Original Transaction ID, Order ID, SKU, quantity, invoice and document references remain on the underlying STR lines for traceability.
+
+The PO grouping view is a preparation/tracking aid. Actual PO creation is still performed in SAP by the business team. After PO, Delivery, Billing and MIGO references are available, upload the refreshed Amazon STR report to update those columns in the tracker. The app does not infer missing document numbers or treat blank document references as completed.
+
+The CSV parser preserves duplicate source headers by assigning positional suffixes internally (for example, the first and second `SAP Storage location` columns remain distinct). The first storage location and plant columns are treated as Ship From values; the second duplicate columns remain in the original raw source row.
 
 ## 7. Current scope and known limitations
 
@@ -104,8 +108,8 @@ This is a working starter project, not a certified production finance system. Be
 - Validate exact Amazon report column headers against current exports.
 - Add duplicate-file hash detection and safer idempotent shipment imports. Shipment rows are currently appended; repeated imports can duplicate lines.
 - Configure date parsing for the actual date format in your exports.
-- Configure fee type filters and currency handling for the exact Amazon fee report.
-- Build a reviewed exception queue for SAP matches and fee lines.
+- Confirm removal-fee amounts and currencies against the latest Amazon Removal Order Detail export before financial sign-off.
+- Validate PO group totals and the SAP document references with a small test upload before operational use.
 - Tighten RLS policies (especially employee update/delete rights), add manager approval rules, and test access with multiple users.
 - Add source file storage upload if retention of original reports is required.
 - Back up Supabase regularly and restrict GitHub repository access.
@@ -117,7 +121,8 @@ This is a working starter project, not a certified production finance system. Be
 - `app.js` — Supabase client, imports, dashboard and workflows
 - `config.example.js` — configuration template
 - `supabase_schema.sql` — database and RLS schema
-- `templates/` — sample CSV headers for each import
+- `templates/amazon_str_template.csv` — exact Amazon STR header template, including the duplicate Ship From / Ship To SAP location headers.
+- `str_po_logic_migration.sql` — adds STR columns and PO grouping keys to an existing Supabase database.
 
 
 ## Revised SKU-wise Warehouse Receipt Tracker (v2)

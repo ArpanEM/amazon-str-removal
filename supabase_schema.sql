@@ -36,9 +36,12 @@ create table if not exists public.import_batches(
 );
 create table if not exists public.str_records(
  id uuid primary key default gen_random_uuid(),transaction_id text not null,invoice_no text,material_code text,
- transaction_date date,quantity numeric(14,3) not null default 0,hsn text,gst_rate numeric(8,3),
- transaction_type text not null check(transaction_type='FC_REMOVAL'),raw_data jsonb,created_at timestamptz not null default now(),
- unique(transaction_id,material_code)
+ transaction_date date,invoice_date date,invoice_value numeric(14,2),taxable_value numeric(14,2),
+ quantity numeric(14,3) not null default 0,actual_qty numeric(14,3),invoice_quantity numeric(14,3),
+ hsn text,gst_rate numeric(8,3),transaction_type text not null check(transaction_type='FC_REMOVAL'),
+ ship_from_fc text,ship_from_storage_location text,ship_from_plant_code text,sku text not null,asin text,order_id text,receiver_gstin text,
+ irn_status text,po_number text,delivery_no text,billing_document text,migo_no text,sap_status text,
+ raw_data jsonb,created_at timestamptz not null default now(),unique(transaction_id,sku)
 );
 create table if not exists public.removal_orders(
  id uuid primary key default gen_random_uuid(),order_id text not null,sku text not null default '',fnsku text not null default '',material_code text,
@@ -77,11 +80,12 @@ create trigger receipt_allocation_guard before insert or update on public.wareho
 
 -- Fee table is deliberately restricted to Amazon removal order references.
 create table if not exists public.amazon_removal_fees(
- id uuid primary key default gen_random_uuid(),order_id text not null,
+ id uuid primary key default gen_random_uuid(),order_id text not null,sku text not null default '',fnsku text not null default '',
  fee_amount numeric(14,2) not null check(fee_amount>=0),currency text not null default 'INR',
  fee_date date,source_file text,raw_data jsonb,created_at timestamptz not null default now()
 );
 create index if not exists removal_fee_order_idx on public.amazon_removal_fees(order_id);
+create unique index if not exists amazon_removal_fees_import_key on public.amazon_removal_fees(order_id,sku,fnsku,source_file);
 create table if not exists public.amazon_claims(
  id uuid primary key default gen_random_uuid(),order_id text not null,claim_ref text,claim_type text not null,
  quantity numeric(14,3) not null default 0,status text not null default 'Open',amount numeric(14,2),remarks text,
