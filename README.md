@@ -156,3 +156,7 @@ The importer normalizes Amazon India date values in `DD/MM/YY HH:mm` and `DD/MM/
 - Warehouse Receipts now starts with a lookup mode: choose Amazon Order ID or Tracking Number, then choose the identifier. The page loads every shipment line associated with that identifier, including SKU/SAP Material Code, FNSKU, tracking number, Amazon status and Amazon shipped quantity.
 - Enter Good, Damaged, Near Expiry, Expired, Short and Not Received quantities for each line, then save all lines together. The app validates each line against its shipped quantity plus previous allocations. Amazon delivery status remains separate from physical warehouse receipt.
 - SKU is treated as SAP Material Code. Material Description remains blank because the provided master header has no description column.
+
+
+### Horizontal report navigation
+Wide report tables now display **Left** and **Right** scroll buttons whenever columns extend beyond the visible area. The buttons move the report horizontally in smooth steps; the left/right controls disable automatically at the respective ends. This is available across report and tracker tables, including Removal Orders, Shipment Tracker and Warehouse Receipt reconciliation.

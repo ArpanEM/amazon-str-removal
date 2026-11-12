@@ -2,7 +2,7 @@
    Static frontend for GitHub Pages + Supabase. All privileged access is enforced by RLS.
    Configure config.js before use. CSV parser is intentionally dependency-free. */
 (() => {
-  const CONTROL_TOWER_BUILD = "2026-11-12-filter-sort-multiline-receipts";
+  const CONTROL_TOWER_BUILD = "2026-11-12-horizontal-scroll-controls";
   console.info("Amazon STR & Removal Control Tower build:", CONTROL_TOWER_BUILD);
   const cfg = window.APP_CONFIG || {};
   const $ = (s, root=document) => root.querySelector(s);
@@ -63,7 +63,7 @@
     if(!p){const name=s.user.user_metadata?.full_name||s.user.email.split("@")[0];const ins=await sb.from("profiles").insert({id:s.user.id,email:s.user.email,full_name:name,role:"employee"}).select().single();p=ins.data;}
     profile=p;$("#userName").textContent=p?.full_name||s.user.email;$("#userRole").textContent=p?.role||"employee";$("#userInitial").textContent=(p?.full_name||"U").slice(0,1).toUpperCase();
     $$(".admin-only").forEach(el=>el.classList.toggle("hidden",!["admin","manager"].includes(p?.role)));
-    $("#loginView").classList.add("hidden");$("#appView").classList.remove("hidden");await loadAll();
+    $("#loginView").classList.add("hidden");$("#appView").classList.remove("hidden");await loadAll();installHorizontalScrollControls();
   }
   async function loadAll(){
     const tables=["removal_orders","shipment_lines","warehouse_receipts","amazon_removal_fees","amazon_claims","sap_postings","import_batches","str_records","product_mappings"];
@@ -114,6 +114,19 @@
   }
   function applyTableFilters(id){const body=$("#"+id),state=tableState[id];if(!body||!state)return;[...body.rows].forEach(row=>{const ok=Object.entries(state.filters).every(([i,v])=>!v||norm(row.cells[Number(i)]?.textContent).includes(norm(v)));row.hidden=!ok;});}
   function sortTableRows(id){const body=$("#"+id),state=tableState[id];if(!body||!state||state.sortCol<0)return;const rows=[...body.rows];rows.sort((a,b)=>{const x=a.cells[state.sortCol]?.textContent.trim()||"",y=b.cells[state.sortCol]?.textContent.trim()||"",nx=Number(x.replace(/,/g,"")),ny=Number(y.replace(/,/g,""));const cmp=x!==""&&y!==""&&Number.isFinite(nx)&&Number.isFinite(ny)?nx-ny:x.localeCompare(y,undefined,{numeric:true,sensitivity:"base"});return state.asc?cmp:-cmp;});rows.forEach(r=>body.append(r));applyTableFilters(id);}
+  // Add always-visible left/right controls to wide report tables so users can reach columns outside the viewport.
+  function installHorizontalScrollControls(){
+    $$(".table-wrap").forEach(wrap=>{
+      if(wrap.querySelector(":scope > .table-scroll-controls")||!wrap.querySelector("table"))return;
+      const controls=document.createElement("div");controls.className="table-scroll-controls";
+      controls.innerHTML='<span class="scroll-hint">Scroll to view all columns</span><div class="scroll-buttons"><button type="button" class="secondary scroll-left" aria-label="Scroll report left" title="Scroll left">← Left</button><button type="button" class="secondary scroll-right" aria-label="Scroll report right" title="Scroll right">Right →</button></div>';
+      controls.querySelector(".scroll-left").addEventListener("click",()=>wrap.scrollBy({left:-Math.max(280,Math.round(wrap.clientWidth*.75)),behavior:"smooth"}));
+      controls.querySelector(".scroll-right").addEventListener("click",()=>wrap.scrollBy({left:Math.max(280,Math.round(wrap.clientWidth*.75)),behavior:"smooth"}));
+      wrap.prepend(controls);
+      const update=()=>{const max=wrap.scrollWidth-wrap.clientWidth;controls.classList.toggle("is-scrollable",max>8);controls.querySelector(".scroll-left").disabled=wrap.scrollLeft<=2;controls.querySelector(".scroll-right").disabled=wrap.scrollLeft>=max-2;};
+      wrap.addEventListener("scroll",update,{passive:true});window.addEventListener("resize",update);requestAnimationFrame(update);
+    });
+  }
   function emptyRow(n){return `<tr><td colspan="${n}" class="muted">No records found.</td></tr>`;}
   function enrichShipment(s){
     const order=cache.orders.find(o=>o.order_id===s.order_id && ((!s.fnsku||o.fnsku===s.fnsku)||(!s.sku||o.sku===s.sku)));
