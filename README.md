@@ -169,6 +169,24 @@ Sign in as an employee account and check:
 - **Audit log size.** Every insert, update and delete is logged. Large imports create many audit entries.
 - **Duplicate protection on imports.** Shipments are identified by order, tracking number, SKU, FNSKU and shipped quantity, so the same line cannot be added twice, while two real lines with different quantities (for example 9 and 3 units on one tracking number) are both kept. Fees are identified by order, SKU and FNSKU. Fee rows are no longer separated by filename.
 
+## PO Tracker (current)
+
+The **PO & SAP Tracker** page shows one row per PO and SKU:
+- PO, Delivery, Billing Document and MIGO from the STR / SAP master.
+- SAP Material Code and product title from the Product Mapping Master.
+- PO date (the invoice date in the master).
+- Quantity sent (Invoice Quantity; falls back to Quantity when blank).
+- Quantity received at the warehouse (Good + Damaged + Near Expiry + Expired).
+- Short / Not received quantity, and Pending quantity (sent minus all of these).
+- Pending days (today minus the PO date, for open lines).
+- Status: Awaiting PO, Pending, Partial or Complete.
+
+**Recording receipts:** use the "Record warehouse receipt against a PO" panel. Type the PO number, pick it from the suggestions, enter the quantities for each SKU line, and save. The database refuses any entry that would exceed the quantity sent.
+
+**Re-uploading the STR master:** you can upload the same master again, or a newer one. Existing lines are matched by Transaction ID, Invoice, SKU, quantity and invoice quantity, so they are not added twice. PO, Delivery, Billing, MIGO and status values are filled in or updated for existing lines (managers and admins update existing rows; employees see those lines counted as already present).
+
+**One-time database step:** run `po_tracker_setup.sql` once in SQL Editor. It creates the receipt table, its permissions and the audit log. It deletes no data.
+
 ## Existing database upgrade
 
 For an existing Control Tower installation, deploy the updated frontend files in this package. This frontend revision uses the existing database columns and does not require a new SQL migration. Do not rerun `supabase_schema.sql` or previously applied migrations.
