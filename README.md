@@ -147,3 +147,12 @@ Important: This is an incremental MVP correction, not a production certification
 
 ### Amazon STR date handling update
 The importer normalizes Amazon India date values in `DD/MM/YY HH:mm` and `DD/MM/YYYY` formats into ISO `YYYY-MM-DD` values before writing to the Supabase DATE columns. The time portion is intentionally omitted because `str_records.transaction_date` and `str_records.invoice_date` are DATE fields. No additional database migration is required for this date-format correction.
+
+
+## Tracker controls and warehouse receipt workflow (12 Nov 2026 update)
+
+- Removal Orders, Shipment Tracker, and Warehouse Receipt Reconciliation now provide per-column filters under each table header. Click a column heading to sort ascending/descending; filters can be combined. Existing page-level search and financial-year/month filters remain available.
+- Export buttons export the currently visible rows after the active table filters/sort.
+- Warehouse Receipts now starts with a lookup mode: choose Amazon Order ID or Tracking Number, then choose the identifier. The page loads every shipment line associated with that identifier, including SKU/SAP Material Code, FNSKU, tracking number, Amazon status and Amazon shipped quantity.
+- Enter Good, Damaged, Near Expiry, Expired, Short and Not Received quantities for each line, then save all lines together. The app validates each line against its shipped quantity plus previous allocations. Amazon delivery status remains separate from physical warehouse receipt.
+- SKU is treated as SAP Material Code. Material Description remains blank because the provided master header has no description column.
