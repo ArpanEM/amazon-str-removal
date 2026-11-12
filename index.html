@@ -47,9 +47,9 @@
 
     <main class="main">
       <header class="topbar">
-        <div><div class="eyebrow">OPERATIONS / AMAZON</div><h2 id="pageTitle">Dashboard</h2></div>
+        <div style="display:flex;align-items:center;gap:14px"><img src="assets/emami-group-logo.jpeg" alt="Emami Group" style="height:46px;width:auto"><div><div class="eyebrow">OPERATIONS / AMAZON</div><h2 id="pageTitle">Dashboard</h2></div></div>
         <div class="top-controls">
-          <select id="fyFilter" aria-label="Financial year"><option value="all">All financial years</option><option>2026-27</option><option>2025-26</option></select>
+          <select id="fyFilter" aria-label="Financial year"><option value="all">All years</option></select>
           <select id="monthFilter" aria-label="Month"><option value="all">All months</option></select>
           <div class="user-chip"><span class="avatar" id="userInitial">U</span><span><b id="userName">User</b><small id="userRole">Employee</small></span></div>
         </div>
@@ -63,7 +63,7 @@
           <article class="kpi"><span>Physically received</span><b id="kpiReceived">0</b><small>Good + damaged + expiry categories</small></article>
           <article class="kpi"><span>Pending receipt</span><b id="kpiPending">0</b><small>Awaiting final allocation</small></article>
           <article class="kpi"><span>Amazon removal fees</span><b id="kpiFees">₹0.00</b><small>Actual Amazon-reported fees only</small></article>
-          <article class="kpi"><span>Open claims</span><b id="kpiClaims">0</b><small>Not closed</small></article>
+          <article class="kpi"><span>Open claims</span><b id="kpiClaims">0</b><small>Not closed</small></article><article class="kpi"><span>Amazon invoices raised</span><b id="kpiInvoices">0</b><small>Removal invoices in STR (current filter)</small></article><article class="kpi"><span>POs created</span><b id="kpiPOs">0</b><small>Distinct PO numbers (current filter)</small></article>
         </div>
         <div class="grid-two">
           <article class="panel"><div class="panel-head"><div><h3>Monthly shipment vs receipt</h3><p class="muted">Shipment and receipt dates are counted separately.</p></div></div><canvas id="trendChart" height="115"></canvas></article>
@@ -96,6 +96,6 @@
     </main>
   </div>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
-  <script src="app.js?v=20261112-po-tracker1"></script>
+  <script src="app.js?v=20261112-dashboard1"></script>
 </body>
 </html>
