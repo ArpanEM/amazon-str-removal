@@ -144,3 +144,7 @@ For an existing Control Tower installation, deploy the updated frontend files an
 5. FNSKU mapping (or SKU fallback when FNSKU is absent) is applied only when it resolves to one unique SKU/material combination. Conflicting or missing mappings remain flagged and are not silently assigned.
 
 Important: This is an incremental MVP correction, not a production certification. Existing shipment records will show mapped SKU/material dynamically from the mapping master where a unique match exists. The new database columns are used for future shipment imports. Validate Amazon source column names and mapping results with a small test import before bulk use. Duplicate shipment import prevention and a full exception-resolution workflow remain future hardening items.
+
+
+### Amazon STR date handling update
+The importer normalizes Amazon India date values in `DD/MM/YY HH:mm` and `DD/MM/YYYY` formats into ISO `YYYY-MM-DD` values before writing to the Supabase DATE columns. The time portion is intentionally omitted because `str_records.transaction_date` and `str_records.invoice_date` are DATE fields. No additional database migration is required for this date-format correction.

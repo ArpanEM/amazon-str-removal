@@ -34,7 +34,19 @@
   }
   const pick=(o,...keys)=>{for(const k of keys){const found=Object.keys(o||{}).find(x=>x.toLowerCase()===k.toLowerCase());if(found)return o[found];}return "";};
   const num=v=>{const n=Number(String(v??"").replace(/,/g,""));return Number.isFinite(n)?n:0;};
-  const dateISO=v=>{const x=String(v??"").trim();if(!x)return null;if(/^\d{4}-\d{2}-\d{2}/.test(x))return x.slice(0,10);const m=x.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{4})$/);if(m)return `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;return x;};
+  // Amazon India exports dates as DD/MM/YY HH:mm (for example 25/09/26 05:30).
+  // The STR database columns are DATE, so normalize to YYYY-MM-DD and discard time.
+  // Also accepts ISO dates, DD/MM/YYYY, DD-MM-YY and Excel-parsed date strings.
+  const dateISO=v=>{
+    if(v===null||v===undefined||v==="")return null;
+    if(v instanceof Date&&!Number.isNaN(v.getTime()))return `${v.getFullYear()}-${String(v.getMonth()+1).padStart(2,"0")}-${String(v.getDate()).padStart(2,"0")}`;
+    const x=String(v).trim();if(!x)return null;
+    let m=x.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s].*)?$/);
+    if(m){const y=Number(m[1]),mo=Number(m[2]),d=Number(m[3]);if(y>=1900&&mo>=1&&mo<=12&&d>=1&&d<=31)return `${String(y).padStart(4,"0")}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;return null;}
+    m=x.match(/^(\d{1,2})[./-](\d{1,2})[./-](\d{2}|\d{4})(?:[ T].*)?$/);
+    if(m){const d=Number(m[1]),mo=Number(m[2]);let y=Number(m[3]);if(m[3].length===2)y+=2000;if(y>=1900&&y<=2100&&mo>=1&&mo<=12&&d>=1&&d<=31)return `${String(y).padStart(4,"0")}-${String(mo).padStart(2,"0")}-${String(d).padStart(2,"0")}`;return null;}
+    return null;
+  };
   const norm=s=>String(s??"").trim().toLowerCase();
   async function audit(action,entity,details={}){if(!sb||!session)return;await sb.from("audit_logs").insert({user_id:session.user.id,action,entity,details});}
   async function init(){
