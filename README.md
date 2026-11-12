@@ -118,3 +118,13 @@ This is a working starter project, not a certified production finance system. Be
 - `config.example.js` — configuration template
 - `supabase_schema.sql` — database and RLS schema
 - `templates/` — sample CSV headers for each import
+
+
+## Revised SKU-wise Warehouse Receipt Tracker (v2)
+1. In Supabase SQL Editor, run `receipt_sku_mapping_migration.sql` before replacing the website files.
+2. Upload the product mapping master from Reports & Imports using report type **Product Mapping Master**. Use `templates/product_mapping_template.csv` as a header example; your Book8.xlsx export can be saved as CSV with its actual headers.
+3. Import Removal Order Detail first, then Removal Shipment Detail. The receipt selector now shows Order ID, SKU, FNSKU, tracking number and shipped quantity.
+4. Warehouse Receipt reconciliation displays SKU, FNSKU, Material Code, tracking number, shipped quantity, each receipt category, physical received, short, not received, pending allocation and mapping status.
+5. FNSKU mapping (or SKU fallback when FNSKU is absent) is applied only when it resolves to one unique SKU/material combination. Conflicting or missing mappings remain flagged and are not silently assigned.
+
+Important: This is an incremental MVP correction, not a production certification. Existing shipment records will show mapped SKU/material dynamically from the mapping master where a unique match exists. The new database columns are used for future shipment imports. Validate Amazon source column names and mapping results with a small test import before bulk use. Duplicate shipment import prevention and a full exception-resolution workflow remain future hardening items.

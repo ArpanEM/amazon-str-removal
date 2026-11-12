@@ -41,7 +41,7 @@ create table if not exists public.str_records(
  unique(transaction_id,material_code)
 );
 create table if not exists public.removal_orders(
- id uuid primary key default gen_random_uuid(),order_id text not null,sku text not null default '',fnsku text not null default '',
+ id uuid primary key default gen_random_uuid(),order_id text not null,sku text not null default '',fnsku text not null default '',material_code text,
  requested_qty numeric(14,3) not null default 0,cancelled_qty numeric(14,3) not null default 0,
  shipped_qty numeric(14,3) not null default 0,in_process_qty numeric(14,3) not null default 0,
  status text,request_date date,raw_data jsonb,created_at timestamptz not null default now(),
@@ -49,7 +49,7 @@ create table if not exists public.removal_orders(
 );
 create table if not exists public.shipment_lines(
  id uuid primary key default gen_random_uuid(),order_id text not null,tracking_number text not null,
- sku text,fnsku text,shipped_qty numeric(14,3) not null default 0,amazon_status text,
+ sku text,fnsku text,material_code text,mapping_status text not null default 'unmapped',shipped_qty numeric(14,3) not null default 0,amazon_status text,
  shipment_date date,disposition text,raw_data jsonb,created_at timestamptz not null default now()
 );
 create index if not exists shipment_order_idx on public.shipment_lines(order_id);
