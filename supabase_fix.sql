@@ -1,4 +1,51 @@
 -- =====================================================================
+-- Amazon STR & Removal Control Tower: ONE-TIME database update.
+--
+-- Run this whole file ONCE in Supabase SQL Editor (after backing up).
+-- It runs in a single transaction: if any step fails, nothing is changed.
+--
+-- Part 1 removes 3 identical duplicate shipment rows from the
+--        473573020769.csv import (kept: one copy of each).
+-- Part 2 applies the permissions, audit log and duplicate protection.
+--
+-- Safe to re-run: Part 1 removes 0 rows the second time and continues.
+-- =====================================================================
+
+begin;
+
+-- ---------------------------------------------------------------------
+-- PART 1: remove identical duplicate shipment rows (keeps the oldest copy).
+-- Only rows that are exact copies (same order, tracking, SKU, FNSKU and
+-- shipped quantity) are removed. Rows with warehouse receipts are never
+-- removed. Stops if the number removed is not 0 or 3.
+-- ---------------------------------------------------------------------
+do $$
+declare
+  removed int;
+begin
+  with ranked as (
+    select id,
+           row_number() over (partition by order_id, tracking_number, sku, fnsku, shipped_qty
+                              order by created_at, id) as rn,
+           count(*)     over (partition by order_id, tracking_number, sku, fnsku, shipped_qty) as copies
+    from public.shipment_lines
+  ),
+  to_remove as (
+    select id from ranked where copies > 1 and rn > 1
+  )
+  delete from public.shipment_lines s
+  using to_remove r
+  where s.id = r.id
+    and not exists (select 1 from public.warehouse_receipts w where w.shipment_line_id = s.id);
+
+  get diagnostics removed = row_count;
+
+  if removed not in (0, 3) then
+    raise exception 'STOPPED in Part 1. Expected to remove 0 or 3 identical copies but found %. Nothing was changed.', removed;
+  end if;
+end $$;
+
+-- =====================================================================
 -- Amazon STR & Removal Control Tower: permissions, audit log and
 -- duplicate protection (Option A).
 --
@@ -18,10 +65,10 @@ do $$
 begin
   if exists (
     select 1 from public.shipment_lines
-    group by order_id, tracking_number, sku, fnsku
+    group by order_id, tracking_number, sku, fnsku, shipped_qty
     having count(*) > 1
   ) then
-    raise exception 'STOPPED. Duplicate shipment_lines exist. Nothing was changed. Send the duplicate query output before continuing.';
+    raise exception 'STOPPED. Identical duplicate shipment_lines exist. Nothing was changed. Run the cleanup first, then run this file again.';
   end if;
 
   if exists (
@@ -37,8 +84,11 @@ end $$;
 -- ---------------------------------------------------------------------
 -- STEP 2: Duplicate protection (unique keys).
 -- ---------------------------------------------------------------------
+-- Identity includes shipped_qty: Amazon can list two real lines for one
+-- tracking number with different quantities (for example 9 and 3 units).
+drop index if exists public.shipment_lines_identity_uidx;
 create unique index if not exists shipment_lines_identity_uidx
-  on public.shipment_lines (order_id, tracking_number, sku, fnsku);
+  on public.shipment_lines (order_id, tracking_number, sku, fnsku, shipped_qty);
 
 drop index if exists public.amazon_removal_fees_import_key;
 create unique index if not exists amazon_removal_fees_identity_uidx
@@ -152,3 +202,5 @@ order by tablename, cmd, policyname;
 -- Duplicates here would double-count PO and invoice quantities.
 -- select transaction_id, sku, count(*) from public.str_records
 --   where sku is not null group by 1, 2 having count(*) > 1;
+
+commit;

@@ -132,9 +132,15 @@ The Supabase Free plan does not include automatic backups. Before running the SQ
 In Supabase, go to **Authentication → Sign In / Providers** and turn off **Allow new users to sign up**. Add employees yourself through **Authentication → Users → Invite user**. Anyone who can sign up gets access to the data, so this step matters.
 
 ### Step 3: Run the SQL once
-Open **SQL Editor**, paste the full contents of `supabase_fix.sql`, and run it. Do not re-run the original schema or the earlier four migrations, which are already applied.
-- If the script shows "STOPPED. Duplicate ... exist", nothing has been changed. Copy the message and send it to your developer.
+Open **SQL Editor**, paste the full contents of `supabase_fix.sql`, and run it. This is the only SQL file to run.
+- The file runs as one transaction. If any step fails, nothing is changed. Copy the error message and send it to your developer.
+- Part 1 removes 3 identical duplicate shipment rows from the first removal shipment import (`473573020769.csv`). Shipment lines that have warehouse receipts are never removed.
+- Part 2 applies the permissions, audit log and duplicate protection.
 - At the end, the CHECK query lists the policies now in force. Each operational table should show `update managers` and `delete managers`, and no `update authenticated`.
+- Do not re-run the original schema or the earlier four migrations, which are already applied.
+
+### Step 3a: Confirm the shipment count
+In SQL Editor, run `select count(*) from public.shipment_lines;`. If only the 473573020769.csv file has been imported for shipments, the count should be 48.
 
 ### Step 4: Upload the updated files
 Upload `app.js`, `index.html`, `supabase_fix.sql` and `README.md` to the GitHub repository, replacing the old copies. Wait for GitHub Pages to rebuild, then open the app and press Ctrl+F5 (or Cmd+Shift+R on Mac) to clear the old script from the browser cache.
@@ -161,7 +167,7 @@ Sign in as an employee account and check:
 ### What this update does not change yet
 - **STR upload key.** STR rows are still identified by the older key, which includes the row position in the file. Changing it now would insert your existing STR rows again. This will be handled in a separate step after a duplicate review. Until then, after each STR upload run the read-only check at the end of `supabase_fix.sql`.
 - **Audit log size.** Every insert, update and delete is logged. Large imports create many audit entries.
-- **Duplicate protection on imports.** Shipments and removal fees are identified by order, tracking number, SKU and FNSKU (shipments) or order, SKU and FNSKU (fees), so the same line cannot be added twice. Fee rows are no longer separated by filename.
+- **Duplicate protection on imports.** Shipments are identified by order, tracking number, SKU, FNSKU and shipped quantity, so the same line cannot be added twice, while two real lines with different quantities (for example 9 and 3 units on one tracking number) are both kept. Fees are identified by order, SKU and FNSKU. Fee rows are no longer separated by filename.
 
 ## Existing database upgrade
 
