@@ -606,7 +606,7 @@
     say("warehouseImportMsg",`Done. Read ${T.read}, accepted ${T.accepted}, already imported ${T.duplicates}, rejected ${T.rejected}.`,T.rejected===0);
     const box=$("#warehouseImportTotals");if(box)box.innerHTML=problems.length?`<p class="muted">${problems.map(esc).join("<br>")}</p>`:"";
   }
-  const COURIER_TRACK_PAGES={BLUEDART:{base:"https://www.bluedart.com/home",direct:false},DLV:{base:"https://www.delhivery.com/track-v2/package/",direct:true}};
+  const COURIER_TRACK_PAGES={BLUEDART:{base:"https://www.bluedart.com/web/guest/trackdartresult",direct:false},DLV:{base:"https://www.delhivery.com/track-v2/package/",direct:true}};
   function courierPageFor(carrier){const c=String(carrier||"").toUpperCase();if(c.includes("BLUEDART")||c.includes("BLUE_DART"))return COURIER_TRACK_PAGES.BLUEDART;if(c.includes("DLV"))return COURIER_TRACK_PAGES.DLV;return null;}
   async function trackShipment(tracking,carrier){
     try{await navigator.clipboard.writeText(String(tracking));}catch(_){}
