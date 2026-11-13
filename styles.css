@@ -84,3 +84,12 @@ input:focus,select:focus{outline:none;border-color:#1769aa;box-shadow:0 0 0 3px 
 /* Frozen first columns: stay visible while scrolling sideways */
 .frozen{position:sticky;z-index:2;background:#ffffff!important;box-shadow:2px 0 4px -2px #0f172a24}
 th.frozen{z-index:4;background:#f5f8fc!important}
+
+/* Compact upload forms */
+form#amazonImportForm,form#invoiceImportForm,form#warehouseImportForm{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end}
+form#amazonImportForm label,form#invoiceImportForm label,form#warehouseImportForm label{flex:1 1 220px;min-width:180px;font-size:12px;gap:4px}
+form#amazonImportForm label.wide,form#invoiceImportForm label.wide,form#warehouseImportForm label.wide{flex:2 1 320px}
+form#amazonImportForm input,form#invoiceImportForm input,form#warehouseImportForm input{font-size:12px;padding:6px 8px}
+form#amazonImportForm button,form#invoiceImportForm button,form#warehouseImportForm button{padding:7px 14px;font-size:12px;border-radius:9px;width:auto;flex:0 0 auto;white-space:nowrap}
+form#amazonImportForm button,form#invoiceImportForm button,form#warehouseImportForm button{margin-bottom:2px}
+input[type=file]{font-size:12px}

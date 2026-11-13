@@ -606,13 +606,14 @@
     say("warehouseImportMsg",`Done. Read ${T.read}, accepted ${T.accepted}, already imported ${T.duplicates}, rejected ${T.rejected}.`,T.rejected===0);
     const box=$("#warehouseImportTotals");if(box)box.innerHTML=problems.length?`<p class="muted">${problems.map(esc).join("<br>")}</p>`:"";
   }
-  const COURIER_TRACK_PAGES={BLUEDART:"https://www.bluedart.com/tracking"};
-  function courierPageFor(carrier){const c=String(carrier||"").toUpperCase();if(c.includes("BLUEDART")||c.includes("BLUE_DART"))return COURIER_TRACK_PAGES.BLUEDART;return null;}
+  const COURIER_TRACK_PAGES={BLUEDART:{base:"https://www.bluedart.com/home",direct:false},DLV:{base:"https://www.delhivery.com/track-v2/package/",direct:true}};
+  function courierPageFor(carrier){const c=String(carrier||"").toUpperCase();if(c.includes("BLUEDART")||c.includes("BLUE_DART"))return COURIER_TRACK_PAGES.BLUEDART;if(c.includes("DLV"))return COURIER_TRACK_PAGES.DLV;return null;}
   async function trackShipment(tracking,carrier){
     try{await navigator.clipboard.writeText(String(tracking));}catch(_){}
-    const url=courierPageFor(carrier);
-    if(!url){alert(`Tracking ${tracking} copied.\n\nThe courier tracking page for "${carrier||"unknown carrier"}" is not set up yet. Open the courier site and paste the number.`);return;}
-    window.open(url,"_blank","noopener");
+    const page=courierPageFor(carrier);
+    if(!page){alert(`Tracking ${tracking} copied.\n\nThe courier tracking page for "${carrier||"unknown carrier"}" is not set up yet. Open the courier site and paste the number.`);return;}
+    if(page.direct){window.open(page.base+encodeURIComponent(String(tracking)),"_blank","noopener");return;}
+    window.open(page.base,"_blank","noopener");
     alert(`Tracking number ${tracking} copied.\n\nOn the Blue Dart page, paste it (Ctrl+V) and press Track.`);
   }
   function renderRecon(){
