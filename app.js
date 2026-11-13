@@ -88,7 +88,7 @@
     mSel.value=monthsForFy.includes(mVal)?mVal:"all";
   }
   function renderAll(){
-    populateFilters();renderRecon();renderDashCharts();freezeAll();
+    populateFilters();renderRecon();renderDashCharts();renderReceiptEntries();renderProducts();freezeAll();
     const orders=filtered(cache.orders,"request_date"),ships=filtered(cache.shipments,"shipment_date"),fees=filtered(cache.fees,"fee_date");
     const shipped=ships.reduce((a,x)=>a+num(x.shipped_qty),0),rt={good_qty:0,damaged_qty:0,near_expiry_qty:0,expired_qty:0,short_qty:0,not_received_qty:0};
     ships.forEach(s=>{const t=receiptTotals(s.id);Object.keys(rt).forEach(k=>rt[k]+=t[k]);});
@@ -203,7 +203,7 @@
     $("#sapExceptions").innerHTML=records.filter(r=>!r.po_number||!r.delivery_no||!r.billing_document||!r.migo_no||!r.sku).slice(0,1000).map(r=>`<tr><td>Amazon STR</td><td>${esc(r.transaction_id)}</td><td>${esc(r.sku||"—")}</td><td>${esc(!r.sku?"Missing SKU / SAP Material Code":!r.po_number?"PO pending":!r.delivery_no?"Delivery pending":!r.billing_document?"Billing document pending":"MIGO pending")}</td><td>${esc(r.irn_status||"—")}</td><td>Review</td></tr>`).join("")||emptyRow(6);
   }
   function renderImports(){$("#importsTable").innerHTML=cache.imports.map(x=>`<tr><td>${esc(x.file_name)}</td><td>${esc(x.report_type)}</td><td>${fmt(x.rows_read)}</td><td>${fmt(x.rows_accepted)}</td><td>${fmt(x.rejected_count||0)}</td><td>${esc((x.error_details||[]).slice(0,2).join(" | "))}</td><td>${esc(x.imported_by_email||"—")}</td><td>${esc(x.created_at?.slice(0,10)||"—")}</td></tr>`).join("")||emptyRow(8);}
-  async function renderEmployees(){if(!["admin","manager"].includes(profile?.role))return;const {data}=await sb.from("profiles").select("id,email,full_name,role").order("created_at");$("#employeesTable").innerHTML=(data||[]).map(p=>`<tr><td>${esc(p.full_name)}</td><td>${esc(p.email)}</td><td>${esc(p.role)}</td><td>${p.id===session.user.id?"Current user":profile?.role!=="admin"?"View only":`<select data-role-user="${p.id}"><option ${p.role==="employee"?"selected":""}>employee</option><option ${p.role==="manager"?"selected":""}>manager</option><option ${p.role==="admin"?"selected":""}>admin</option></select>`}</td></tr>`).join("")||emptyRow(4);$$("[data-role-user]").forEach(el=>el.addEventListener("change",async()=>{const {error}=await sb.from("profiles").update({role:el.value}).eq("id",el.dataset.roleUser);if(error)alert(friendlyDbError(error));else{await audit("role_updated","profile",{user_id:el.dataset.roleUser,role:el.value});await renderEmployees();}}));}
+  async function renderEmployees(){if(!["admin","manager"].includes(profile?.role))return;const {data}=await sb.from("profiles").select("id,email,full_name,role").order("created_at");$("#employeesTable").innerHTML=(data||[]).map(p=>`<tr><td>${esc(p.full_name)}</td><td>${esc(p.email)}</td><td>${esc(p.role)}</td><td>${p.id===session.user.id?"Current user":profile?.role!=="admin"?"View only":`<select data-role-user="${p.id}"><option ${p.role==="employee"?"selected":""}>employee</option><option ${p.role==="manager"?"selected":""}>manager</option><option ${p.role==="warehouse"?"selected":""}>warehouse</option><option ${p.role==="admin"?"selected":""}>admin</option></select>`}</td></tr>`).join("")||emptyRow(4);$$("[data-role-user]").forEach(el=>el.addEventListener("change",async()=>{const {error}=await sb.from("profiles").update({role:el.value}).eq("id",el.dataset.roleUser);if(error)alert(friendlyDbError(error));else{await audit("role_updated","profile",{user_id:el.dataset.roleUser,role:el.value});await renderEmployees();}}));}
   async function renderAudit(){if(!["admin","manager"].includes(profile?.role))return;const {data}=await sb.from("audit_logs").select("*,profiles(full_name,email)").order("created_at",{ascending:false}).limit(300);$("#auditTable").innerHTML=(data||[]).map(a=>`<tr><td>${esc(a.created_at?.replace("T"," ").slice(0,19))}</td><td>${esc(a.profiles?.full_name||a.profiles?.email||"—")}</td><td>${esc(a.action)}</td><td>${esc(a.entity)}</td><td>${esc(JSON.stringify(a.details||{}))}</td></tr>`).join("")||emptyRow(5);}
   function nav(page){$$(".page").forEach(p=>p.classList.add("hidden"));$("#"+page+"Page").classList.remove("hidden");$$(".nav-item").forEach(n=>n.classList.toggle("active",n.dataset.page===page));$("#pageTitle").textContent=({dashboard:"Dashboard",orders:"Removal Orders",shipments:"Shipment Tracker",receipts:"Warehouse Receipts",fees:"Amazon Removal Fees",sap:"PO & SAP Tracker",claims:"Amazon Claims",reconciliation:"Reconciliation",reports:"Reports & Imports",employees:"Employee Management",audit:"Audit Logs"})[page]||"Dashboard";}
   async function addImport(file,type,read,accepted){const {error}=await sb.from("import_batches").insert({file_name:file.name,report_type:type,rows_read:read,rows_accepted:accepted,rejected_count:importProblemCount,error_details:importProblems,imported_by:session.user.id,imported_by_email:session.user.email});if(error)throw error;await audit("report_imported","import_batch",{file:file.name,type,rows_read:read,rows_accepted:accepted,rejected_count:importProblemCount});}
@@ -219,7 +219,7 @@
   async function importOrders(rows,file){let accepted=0,feeAccepted=0,skipped=0;for(let i=0;i<rows.length;i++){const r=rows[i];const x={order_id:pick(r,"order-id","order id","removal-order-id"),sku:pick(r,"sku"),fnsku:pick(r,"fnsku"),material_code:pick(r,"material-code","material code","material"),requested_qty:num(pick(r,"requested-quantity","requested qty")),cancelled_qty:num(pick(r,"cancelled-quantity","cancelled qty")),shipped_qty:num(pick(r,"shipped-quantity","shipped qty")),in_process_qty:num(pick(r,"in-process-quantity","in-process qty")),status:pick(r,"status","order-status"),request_date:dateISO(pick(r,"request-date","created-date")),raw_data:r};if(!x.order_id){problem(file,i+2,'Missing Order ID');continue;}const {data:ordRows,error}=await sb.from("removal_orders").upsert(x,writeOpts({onConflict:"order_id,sku,fnsku"})).select("id");if(error)problem(file,i+2,friendlyDbError(error));else if(ordRows?.length||canEdit())accepted++;else skipped++;
       const rawFee=pick(r,"removal-fee","removal fee"),currency=pick(r,"currency");if(String(rawFee).trim()!==""&&currency){const feeRow={order_id:x.order_id,sku:x.sku||"",fnsku:x.fnsku||"",fee_amount:num(rawFee),currency,fee_date:x.request_date,source_file:file.name,raw_data:r};const {data:feeRows,error:feeError}=await sb.from("amazon_removal_fees").upsert(feeRow,writeOpts({onConflict:"order_id,sku,fnsku"})).select("id");if(feeError)problem(file,i+2,`Fee: ${friendlyDbError(feeError)}`);else if(feeRows?.length||canEdit())feeAccepted++;}}
     await addImport(file,"removal_order_detail",rows.length,accepted);return {accepted,feeAccepted,skipped};}
-  async function importShipments(rows,file){let accepted=0,skipped=0;for(let i=0;i<rows.length;i++){const r=rows[i],order_id=pick(r,"order-id","order id"),tracking_number=pick(r,"tracking-number","tracking number"),fnsku=pick(r,"fnsku"),sku=pick(r,"sku"),asin=pick(r,"asin");if(!order_id||!tracking_number){problem(file,i+2,'Missing Order ID or Tracking Number');continue;}const order=cache.orders.find(o=>o.order_id===order_id&&((fnsku&&o.fnsku===fnsku)||(sku&&o.sku===sku)));const match=uniqueMap(cache.mappings,[{field:'fnsku',label:'FNSKU',value:fnsku},{field:'sku',label:'SKU',value:sku},{field:'asin',label:'ASIN',value:asin}].filter(x=>x.value));const mapped=match.row;const x={order_id,tracking_number,fnsku:fnsku||'',sku:sku||order?.sku||mapped?.sku||'',material_code:order?.material_code||mapped?.material_code||null,mapping_status:match.conflict?'conflict':(sku||order?.sku||mapped)?'matched':'unmapped',shipped_qty:num(pick(r,"shipped-quantity","quantity-shipped","quantity")),amazon_status:pick(r,"status","shipment-status"),shipment_date:dateISO(pick(r,"shipment-date","shipped-date")),disposition:pick(r,"disposition"),raw_data:r};const {data:shipRows,error}=await sb.from("shipment_lines").upsert(x,writeOpts({onConflict:"order_id,tracking_number,sku,fnsku,shipped_qty"})).select("id");if(error)problem(file,i+2,friendlyDbError(error));else if(shipRows?.length||canEdit())accepted++;else skipped++;}await addImport(file,"removal_shipment_detail",rows.length,accepted);return {accepted,skipped};}
+  async function importShipments(rows,file){let accepted=0,skipped=0;const seqMap=new Map();for(let i=0;i<rows.length;i++){const r=rows[i],order_id=pick(r,"order-id","order id"),tracking_number=pick(r,"tracking-number","tracking number"),fnsku=pick(r,"fnsku"),sku=pick(r,"sku"),asin=pick(r,"asin");if(!order_id||!tracking_number){problem(file,i+2,'Missing Order ID or Tracking Number');continue;}const order=cache.orders.find(o=>o.order_id===order_id&&((fnsku&&o.fnsku===fnsku)||(sku&&o.sku===sku)));const match=uniqueMap(cache.mappings,[{field:'fnsku',label:'FNSKU',value:fnsku},{field:'sku',label:'SKU',value:sku},{field:'asin',label:'ASIN',value:asin}].filter(x=>x.value));const mapped=match.row;const x={order_id,tracking_number,fnsku:fnsku||'',sku:sku||order?.sku||mapped?.sku||'',material_code:order?.material_code||mapped?.material_code||null,mapping_status:match.conflict?'conflict':(sku||order?.sku||mapped)?'matched':'unmapped',shipped_qty:num(pick(r,"shipped-quantity","quantity-shipped","quantity")),amazon_status:pick(r,"status","shipment-status"),shipment_date:dateISO(pick(r,"shipment-date","shipped-date")),disposition:pick(r,"disposition"),raw_data:r};const sk=[x.order_id,x.tracking_number,x.sku,x.fnsku,x.shipped_qty].join("|");const seq=(seqMap.get(sk)||0)+1;seqMap.set(sk,seq);x.line_seq=seq;const {data:shipRows,error}=await sb.from("shipment_lines").upsert(x,writeOpts({onConflict:"order_id,tracking_number,sku,fnsku,shipped_qty,line_seq"})).select("id");if(error)problem(file,i+2,friendlyDbError(error));else if(shipRows?.length||canEdit())accepted++;else skipped++;}await addImport(file,"removal_shipment_detail",rows.length,accepted);return {accepted,skipped};}
   async function importMappings(rows,file){
     let accepted=0,updated=0,skipped=0;
     const cleanTitle=s=>String(s??"").replace(/\s*-?\s*INACTIVE\s*$/i,"").trim();
@@ -284,7 +284,7 @@
     $("#loginBtn").onclick=async()=>{const {error}=await sb.auth.signInWithPassword({email:$("#loginEmail").value,password:$("#loginPassword").value});say("loginMsg",error?.message||"Signing in…",!error);};
     $("#logoutBtn").onclick=()=>sb.auth.signOut();
     $$("#nav [data-page]").forEach(b=>b.onclick=()=>nav(b.dataset.page));$$("[data-goto]").forEach(b=>b.onclick=()=>nav(b.dataset.goto));
-    $("#amazonImportForm").onsubmit=handleAmazonImport;$("#receiptForm").onsubmit=handleReceipt;$("#invoiceImportForm").onsubmit=async e=>{e.preventDefault();const files=e.target.elements.files.files;if(!files.length)return;try{await importInvoiceFiles(files);}catch(err){say("invoiceImportMsg",friendlyDbError(err));}};$("#reconStatus").onchange=renderRecon;document.addEventListener("click",e=>{if(e.target.closest&&e.target.closest(".nav-item"))setTimeout(freezeAll,80);});window.addEventListener("resize",()=>freezeAll());$("#reconSearch").oninput=renderRecon;$("#exportRecon").onclick=()=>exportTable("reconTable","reconciliation.xlsx");$("#poReceiptForm").onsubmit=handlePOReceipt;$("#poLookupValue").oninput=renderPOLineEditor;$("#poReceiptForm").elements.receipt_date.value=today();$("#claimForm").onsubmit=handleClaim;
+    $("#amazonImportForm").onsubmit=handleAmazonImport;$("#receiptForm").onsubmit=handleReceipt;$("#invoiceImportForm").onsubmit=async e=>{e.preventDefault();const files=e.target.elements.files.files;if(!files.length)return;try{await importInvoiceFiles(files);}catch(err){say("invoiceImportMsg",friendlyDbError(err));}};$("#reconStatus").onchange=renderRecon;$("#receiptEditForm").onsubmit=saveReceiptEdit;$("#receiptEditCancel").onclick=()=>$("#receiptEditPanel").classList.add("hidden");$("#productForm").onsubmit=saveProduct;$("#productCancel").onclick=()=>$("#productFormPanel").classList.add("hidden");$("#productAddBtn").onclick=()=>openProductForm("");$("#productSearch").oninput=renderProducts;$("#productsTable").onclick=e=>{const ed=e.target.closest("[data-edit-product]");if(ed){openProductForm(ed.dataset.editProduct);return;}const dl=e.target.closest("[data-delete-product]");if(dl)deleteProduct(dl.dataset.deleteProduct);};$("#receiptEntriesTable").onclick=e=>{const b=e.target.closest("[data-edit-receipt]");if(b)openReceiptEdit(b.dataset.editReceipt);};document.addEventListener("click",e=>{if(e.target.closest&&e.target.closest(".nav-item"))setTimeout(freezeAll,80);});window.addEventListener("resize",()=>freezeAll());$("#reconSearch").oninput=renderRecon;$("#exportRecon").onclick=()=>exportTable("reconTable","reconciliation.xlsx");$("#poReceiptForm").onsubmit=handlePOReceipt;$("#poLookupValue").oninput=renderPOLineEditor;$("#poReceiptForm").elements.receipt_date.value=today();$("#claimForm").onsubmit=handleClaim;
     $("#orderSearch").oninput=renderOrders;$("#shipmentSearch").oninput=renderShipments;$("#exportOrders").onclick=()=>exportTable("ordersTable","amazon_removal_orders.xlsx");$("#exportShipments").onclick=()=>exportTable("shipmentsTable","amazon_shipment_tracker.xlsx");$("#exportReceipts").onclick=()=>exportTable("receiptTable","warehouse_receipt_tracker.xlsx");$("#exportSAP").onclick=()=>exportTable("sapTable","sap_po_tracker.xlsx");$("#monthFilter").onchange=renderAll;$("#fyFilter").onchange=renderAll;
     
     $("#receiptForm").elements.receipt_date.value=today();$("#receiptLookupType").addEventListener("change",renderReceiptSelector);$("#receiptLookupValue").addEventListener("input",renderReceiptLineEditor);
@@ -411,6 +411,100 @@
   }
   function freezeAll(){
     document.querySelectorAll(".table-wrap table").forEach(t=>{t.querySelectorAll(".frozen").forEach(c=>{c.classList.remove("frozen");c.style.left="";});freezeFirstColumns(t,3);});
+  }
+  function receiptAllocated(r){return num(r.good_qty)+num(r.damaged_qty)+num(r.near_expiry_qty)+num(r.expired_qty)+num(r.short_qty)+num(r.not_received_qty);}
+  function canEditReceipt(r){return canEdit()||(profile?.role==="warehouse"&&r.created_by===session.user.id);}
+  function renderReceiptEntries(){
+    const tbl=$("#receiptEntriesTable");if(!tbl)return;
+    const shipById=new Map((cache.shipments||[]).map(s=>[s.id,s]));
+    const rows=[...(cache.receipts||[])].sort((x,y)=>String(y.created_at||"").localeCompare(String(x.created_at||"")));
+    tbl.querySelector("tbody").innerHTML=rows.map(r=>{const s=shipById.get(r.shipment_line_id)||{};const btn=canEditReceipt(r)?`<button class="secondary" data-edit-receipt="${esc(r.id)}">Edit</button>`:`<span class="muted">—</span>`;return `<tr><td>${esc(r.receipt_date||"—")}</td><td>${esc(s.order_id||"—")}</td><td>${esc(s.tracking_number||"—")}</td><td>${esc(s.sku||"—")}</td><td>${fmt(r.good_qty)}</td><td>${fmt(r.damaged_qty)}</td><td>${fmt(r.near_expiry_qty)}</td><td>${fmt(r.expired_qty)}</td><td>${fmt(r.short_qty)}</td><td>${fmt(r.not_received_qty)}</td><td>${esc(r.remarks||"—")}</td><td>${r.created_by===session.user.id?"You":"Team"}</td><td>${btn}</td></tr>`;}).join("")||emptyRow(13);
+    enhanceTable("receiptEntriesTable");freezeAll();
+  }
+  function openReceiptEdit(id){
+    const r=(cache.receipts||[]).find(x=>x.id===id);if(!r)return;
+    const f=$("#receiptEditForm");
+    f.elements.id.value=r.id;
+    ["good_qty","damaged_qty","near_expiry_qty","expired_qty","short_qty","not_received_qty"].forEach(k=>f.elements[k].value=num(r[k]));
+    f.elements.receipt_date.value=r.receipt_date||today();f.elements.remarks.value=r.remarks||"";
+    $("#receiptEditPanel").classList.remove("hidden");say("receiptEditMsg","");
+    $("#receiptEditPanel").scrollIntoView({behavior:"smooth",block:"center"});
+  }
+  async function saveReceiptEdit(e){
+    e.preventDefault();
+    const f=e.target,id=f.elements.id.value,r=(cache.receipts||[]).find(x=>x.id===id);
+    if(!r){say("receiptEditMsg","Receipt not found. Reload the page and try again.");return;}
+    const keys=["good_qty","damaged_qty","near_expiry_qty","expired_qty","short_qty","not_received_qty"];
+    const vals={};keys.forEach(k=>vals[k]=num(f.elements[k].value));
+    if(Object.values(vals).some(v=>v<0)){say("receiptEditMsg","Quantities cannot be negative.");return;}
+    const ship=(cache.shipments||[]).find(s=>s.id===r.shipment_line_id);const shipped=num(ship?.shipped_qty);
+    const others=(cache.receipts||[]).filter(x=>x.shipment_line_id===r.shipment_line_id&&x.id!==id).reduce((acc,x)=>acc+receiptAllocated(x),0);
+    const total=Object.values(vals).reduce((acc,b)=>acc+b,0);
+    if(others+total>shipped){say("receiptEditMsg",`Allocation exceeds shipped quantity. Shipped ${fmt(shipped)}, already allocated to other entries ${fmt(others)}.`);return;}
+    const {error}=await sb.from("warehouse_receipts").update({...vals,receipt_date:f.elements.receipt_date.value,remarks:f.elements.remarks.value||null}).eq("id",id);
+    if(error){say("receiptEditMsg",friendlyDbError(error));return;}
+    await audit("receipt_edited","warehouse_receipt",{id,...vals});
+    say("receiptEditMsg","Saved.",true);
+    await loadAll();
+    $("#receiptEditPanel").classList.add("hidden");
+  }
+  function productCanEdit(){return canEdit();}
+  function renderProducts(){
+    const tbl=$("#productsTable");if(!tbl)return;
+    const q=norm($("#productSearch")?.value||"");
+    const list=(cache.mappings||[]).filter(m=>!q||norm([m.asin,m.sku,m.fnsku,m.material_code,m.title,m.status].join(" ")).includes(q)).sort((x,y)=>String(x.title||"").localeCompare(String(y.title||"")));
+    const act=m=>productCanEdit()?`<button class="secondary" data-edit-product="${esc(m.id)}">Edit</button> <button class="secondary" data-delete-product="${esc(m.id)}">Remove</button>`:`<span class="muted">View only</span>`;
+    tbl.querySelector("tbody").innerHTML=list.map(m=>`<tr><td>${esc(m.asin||"—")}</td><td>${esc(m.sku||"—")}</td><td>${esc(m.fnsku||"—")}</td><td>${esc(m.material_code||"—")}</td><td>${esc(m.title||"—")}</td><td>${fmt(num(m.raw_data?.["Pack Of"])||1)}</td><td><span class="tag ${m.status==="Active"?"ok":m.status==="Inactive"?"neutral":"warn"}">${esc(m.status||"Active")}</span></td><td>${act(m)}</td></tr>`).join("")||emptyRow(8);
+    const addBtn=$("#productAddBtn");if(addBtn)addBtn.classList.toggle("hidden",!productCanEdit());
+    enhanceTable("productsTable");freezeAll();
+  }
+  function openProductForm(id){
+    const f=$("#productForm"),panel=$("#productFormPanel");if(!f||!panel)return;
+    const m=id?(cache.mappings||[]).find(x=>x.id===id):null;
+    f.reset();
+    f.elements.id.value=m?.id||"";
+    f.elements.asin.value=m?.asin||"";f.elements.sku.value=m?.sku||"";f.elements.fnsku.value=m?.fnsku||"";
+    f.elements.material_code.value=m?.material_code||"";f.elements.title.value=m?.title||"";
+    f.elements.pack_of.value=m?(num(m.raw_data?.["Pack Of"])||1):1;
+    f.elements.status.value=m?.status||"Active";
+    $("#productFormTitle").textContent=m?"Edit product / SKU":"Add product / SKU";
+    panel.classList.remove("hidden");say("productMsg","");
+    panel.scrollIntoView({behavior:"smooth",block:"center"});
+  }
+  async function saveProduct(e){
+    e.preventDefault();
+    if(!productCanEdit()){say("productMsg","Only a manager or admin can change products.");return;}
+    const f=e.target,id=f.elements.id.value;
+    const v={asin:f.elements.asin.value.trim()||null,sku:f.elements.sku.value.trim()||null,fnsku:f.elements.fnsku.value.trim()||null,material_code:f.elements.material_code.value.trim()||null,title:f.elements.title.value.trim()||null,status:f.elements.status.value||"Active"};
+    const pack=num(f.elements.pack_of.value)||1;
+    if(!v.asin&&!v.sku&&!v.fnsku){say("productMsg","Enter at least an ASIN, SKU or FNSKU.");return;}
+    const list=cache.mappings||[];
+    const clash=list.find(m=>m.id!==id&&(v.fnsku?norm(m.fnsku)===norm(v.fnsku):(!norm(m.fnsku)&&v.asin&&norm(m.asin)===norm(v.asin))));
+    if(clash){say("productMsg",`Duplicate: ${v.fnsku?"this FNSKU":"this ASIN (without FNSKU)"} already exists as "${clash.title||clash.sku||clash.asin}". Edit that row instead.`);return;}
+    const prev=id?(list.find(m=>m.id===id)?.raw_data||{}):{};
+    const raw={...prev,"Pack Of":pack,"Product Title":v.title,"SKU":v.sku,"FNSKU":v.fnsku,"ASIN":v.asin,"Material Code":v.material_code,"Status":v.status};
+    const row={...v,raw_data:raw};
+    if(id){
+      const {error}=await sb.from("product_mappings").update(row).eq("id",id);
+      if(error){say("productMsg",friendlyDbError(error));return;}
+      await audit("product_edited","product_mapping",{id,...v});
+    }else{
+      const {error}=await sb.from("product_mappings").insert(row);
+      if(error){say("productMsg",friendlyDbError(error));return;}
+      await audit("product_added","product_mapping",v);
+    }
+    say("productMsg","Saved.",true);
+    await loadAll();
+    $("#productFormPanel").classList.add("hidden");
+  }
+  async function deleteProduct(id){
+    if(!productCanEdit())return;
+    const m=(cache.mappings||[]).find(x=>x.id===id);if(!m)return;
+    if(!confirm(`Remove "${m.title||m.sku||m.asin}" from the product master?\n\nTip: set Status to Inactive instead if old removals still use this product.`))return;
+    const {error}=await sb.from("product_mappings").delete().eq("id",id);
+    if(error){say("productMsg",friendlyDbError(error));return;}
+    await audit("product_removed","product_mapping",{id,asin:m.asin,sku:m.sku,fnsku:m.fnsku});
+    await loadAll();
   }
   function renderRecon(){
     const tbl=$("#reconTable");if(!tbl)return;
