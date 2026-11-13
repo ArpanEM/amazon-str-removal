@@ -66,8 +66,8 @@
     $("#loginView").classList.add("hidden");$("#appView").classList.remove("hidden");await loadAll();installHorizontalScrollControls();
   }
   async function loadAll(){
-    const tables=["removal_orders","shipment_lines","warehouse_receipts","amazon_removal_fees","amazon_claims","sap_postings","import_batches","str_records","product_mappings","po_receipts"];
-    const names=["orders","shipments","receipts","fees","claims","sap","imports","str","mappings","poReceipts"];
+    const tables=["removal_orders","shipment_lines","warehouse_receipts","amazon_removal_fees","amazon_claims","sap_postings","import_batches","str_records","product_mappings","po_receipts","amazon_invoices","invoice_zip_imports"];
+    const names=["orders","shipments","receipts","fees","claims","sap","imports","str","mappings","poReceipts","invoices","zipImports"];
     for(let i=0;i<tables.length;i++){const {data,error}=await sb.from(tables[i]).select("*").order("created_at",{ascending:false}).limit(5000);if(!error)cache[names[i]]=data||[];}
     renderAll();
   }
@@ -88,7 +88,7 @@
     mSel.value=monthsForFy.includes(mVal)?mVal:"all";
   }
   function renderAll(){
-    populateFilters();
+    populateFilters();renderRecon();renderDashCharts();freezeAll();
     const orders=filtered(cache.orders,"request_date"),ships=filtered(cache.shipments,"shipment_date"),fees=filtered(cache.fees,"fee_date");
     const shipped=ships.reduce((a,x)=>a+num(x.shipped_qty),0),rt={good_qty:0,damaged_qty:0,near_expiry_qty:0,expired_qty:0,short_qty:0,not_received_qty:0};
     ships.forEach(s=>{const t=receiptTotals(s.id);Object.keys(rt).forEach(k=>rt[k]+=t[k]);});
@@ -172,7 +172,7 @@
   function renderFees(){const fees=cache.fees;const currencies=[...new Set(fees.map(x=>x.currency).filter(Boolean))], total=fees.reduce((a,x)=>a+num(x.fee_amount),0),qty=fees.reduce((a,f)=>{const o=cache.orders.find(x=>x.order_id===f.order_id&&((f.fnsku&&x.fnsku===f.fnsku)||(f.sku&&x.sku===f.sku)));return a+num(o?.shipped_qty);},0);$("#feeTotal").textContent=currencies.length<=1?money(total,currencies[0]||"INR"):"Multiple currencies";$("#feeCount").textContent=fmt(fees.length);$("#feePerUnit").textContent=currencies.length===1&&qty?money(total/qty,currencies[0]):"—";$("#feesTable").innerHTML=fees.slice(0,500).map(f=>`<tr><td>${esc(f.order_id)}</td><td>${esc(f.sku||"—")}</td><td>${esc(f.fnsku||"—")}</td><td>${money(f.fee_amount,f.currency||"INR")}</td><td>${esc(f.currency||"—")}</td><td>${esc(f.fee_date||"—")}</td><td>${esc(f.source_file||"Amazon report")}</td></tr>`).join("")||emptyRow(7);}
   function renderClaims(){$("#claimsTable").innerHTML=cache.claims.map(c=>`<tr><td>${esc(c.order_id)}</td><td>${esc(c.claim_ref||"—")}</td><td>${esc(c.claim_type)}</td><td>${fmt(c.quantity)}</td><td>${esc(c.status)}</td><td>${c.amount==null?"—":money(c.amount)}</td></tr>`).join("")||emptyRow(6);}
   function poReceiptTotals(po,sku){const k=`${norm(po)}|${norm(sku)}`,t={good_qty:0,damaged_qty:0,near_expiry_qty:0,expired_qty:0,short_qty:0,not_received_qty:0};(cache.poReceipts||[]).forEach(p=>{if(`${norm(p.po_number)}|${norm(p.sku)}`===k)Object.keys(t).forEach(f=>t[f]+=num(p[f]));});return t;}
-  function poLineSummary(po){const map=new Map();(cache.str||[]).filter(r=>String(r.po_number)===String(po)).forEach(r=>{const k=norm(r.sku);const g=map.get(k)||{sku:r.sku||"",material:masterFor(r.sku,null,r.asin).material_code||r.material_code||"",title:masterFor(r.sku,null,r.asin).title||"",sent:0};g.sent+=num(r.invoice_quantity)||num(r.quantity);map.set(k,g);});return [...map.values()];}
+  function poLineSummary(po){const map=new Map();(cache.str||[]).filter(r=>String(r.po_number)===String(po)).forEach(r=>{const k=norm(r.sku);const g=map.get(k)||{sku:r.sku||"",material:masterFor(r.sku,null,r.asin).material_code||r.material_code||"",title:masterFor(r.sku,null,r.asin).title||"",sent:0};g.sent+=unitsOf(r);map.set(k,g);});return [...map.values()];}
   function poSearchOptions(){const list=$("#poLookupList");if(!list)return;const pos=[...new Set((cache.str||[]).filter(r=>r.po_number).map(r=>String(r.po_number)))].sort();list.innerHTML=pos.map(p=>`<option value="${esc(p)}"></option>`).join("");}
   function renderPOLineEditor(){
     const po=($("#poLookupValue")?.value||"").trim(),box=$("#poLineEditor");if(!box)return;
@@ -194,21 +194,23 @@
   }
   function renderSAP(){
     const records=cache.str||[],groups=new Map(),dayMs=86400000,todayMs=Date.now();
-    records.forEach(r=>{const key=r.po_number?`${norm(r.po_number)}|${norm(r.sku)}`:`NOPO|${r.id}`;if(!groups.has(key))groups.set(key,{key,po:r.po_number?String(r.po_number):"",sku:r.sku||"",material:masterFor(r.sku,null,r.asin).material_code||r.material_code||"",title:masterFor(r.sku,null,r.asin).title||"",delivery:new Set(),billing:new Set(),migo:new Set(),poDate:r.invoice_date||"",sent:0});const g=groups.get(key);if(r.delivery_no)g.delivery.add(String(r.delivery_no));if(r.billing_document)g.billing.add(String(r.billing_document));if(r.migo_no)g.migo.add(String(r.migo_no));if(r.invoice_date&&(!g.poDate||r.invoice_date<g.poDate))g.poDate=r.invoice_date;g.sent+=num(r.invoice_quantity)||num(r.quantity);});
+    records.forEach(r=>{const key=r.po_number?`${norm(r.po_number)}|${norm(r.sku)}`:`NOPO|${r.id}`;if(!groups.has(key))groups.set(key,{key,po:r.po_number?String(r.po_number):"",sku:r.sku||"",material:masterFor(r.sku,null,r.asin).material_code||r.material_code||"",title:masterFor(r.sku,null,r.asin).title||"",delivery:new Set(),billing:new Set(),migo:new Set(),poDate:r.po_date||r.invoice_date||"",sent:0});const g=groups.get(key);if(r.delivery_no)g.delivery.add(String(r.delivery_no));if(r.billing_document)g.billing.add(String(r.billing_document));if(r.migo_no)g.migo.add(String(r.migo_no));const pd=r.po_date||r.invoice_date;if(pd&&(!g.poDate||pd<g.poDate))g.poDate=pd;g.sent+=unitsOf(r);});
     const rows=[...groups.values()].map(g=>{const t=g.po?poReceiptTotals(g.po,g.sku):{good_qty:0,damaged_qty:0,near_expiry_qty:0,expired_qty:0,short_qty:0,not_received_qty:0};const phys=t.good_qty+t.damaged_qty+t.near_expiry_qty+t.expired_qty,alloc=phys+t.short_qty+t.not_received_qty,pending=Math.max(0,g.sent-alloc),days=pending>0&&g.poDate?Math.max(0,Math.floor((todayMs-new Date(g.poDate).getTime())/dayMs)):0,status=!g.po?"Awaiting PO":(g.sent>0&&pending===0?"Complete":alloc===0?"Pending":"Partial");return {...g,phys,short:alloc-phys,pending,days,status};}).sort((a,b)=>b.days-a.days||a.po.localeCompare(b.po));
     const open=rows.filter(r=>r.status!=="Complete");
     const kpi=document.querySelector("#sapSummary");if(kpi)kpi.innerHTML=`<div class="kpi-grid compact"><article class="kpi"><span>PO lines</span><b>${fmt(rows.length)}</b></article><article class="kpi"><span>Open (not fully received)</span><b>${fmt(open.length)}</b></article><article class="kpi"><span>Pending units</span><b>${fmt(open.reduce((a,r)=>a+r.pending,0))}</b></article><article class="kpi"><span>Oldest pending (days)</span><b>${fmt(Math.max(0,...open.map(r=>r.days)))}</b></article></div>`;
-    $("#sapTable").innerHTML=rows.map(r=>`<tr><td>${esc(r.po||"Awaiting PO")}</td><td>${esc([...r.delivery].join(", ")||"—")}</td><td>${esc([...r.billing].join(", ")||"—")}</td><td>${esc([...r.migo].join(", ")||"—")}</td><td>${esc(r.sku||"—")}</td><td>${esc(r.material||"Not mapped")}</td><td>${esc(r.title||"—")}</td><td>${esc(r.poDate||"—")}</td><td>${fmt(r.sent)}</td><td>${fmt(r.phys)}</td><td>${fmt(r.short)}</td><td><b>${fmt(r.pending)}</b></td><td>${r.pending>0?fmt(r.days):"—"}</td><td><span class="tag">${esc(r.status)}</span></td></tr>`).join("")||emptyRow(14);
+    $("#sapTable").innerHTML=rows.map(r=>`<tr><td>${esc(r.po||"Awaiting PO")}</td><td>${esc([...r.delivery].join(", ")||"—")}</td><td>${esc([...r.billing].join(", ")||"—")}</td><td>${esc([...r.migo].join(", ")||"—")}</td><td>${esc(r.sku||"—")}</td><td>${esc(r.material||"Not mapped")}</td><td>${esc(r.title||"—")}</td><td>${esc(r.poDate||"—")}</td><td>${fmt(r.sent)}</td><td>${fmt(r.phys)}</td><td>${fmt(r.short)}</td><td><b>${fmt(r.pending)}</b></td><td>${r.pending>0?fmt(r.days):"—"}</td><td><span class="tag ${tagFor(r.status)}">${esc(r.status)}</span></td></tr>`).join("")||emptyRow(14);
     enhanceTable("sapTable");poSearchOptions();
     $("#sapExceptions").innerHTML=records.filter(r=>!r.po_number||!r.delivery_no||!r.billing_document||!r.migo_no||!r.sku).slice(0,1000).map(r=>`<tr><td>Amazon STR</td><td>${esc(r.transaction_id)}</td><td>${esc(r.sku||"—")}</td><td>${esc(!r.sku?"Missing SKU / SAP Material Code":!r.po_number?"PO pending":!r.delivery_no?"Delivery pending":!r.billing_document?"Billing document pending":"MIGO pending")}</td><td>${esc(r.irn_status||"—")}</td><td>Review</td></tr>`).join("")||emptyRow(6);
   }
   function renderImports(){$("#importsTable").innerHTML=cache.imports.map(x=>`<tr><td>${esc(x.file_name)}</td><td>${esc(x.report_type)}</td><td>${fmt(x.rows_read)}</td><td>${fmt(x.rows_accepted)}</td><td>${fmt(x.rejected_count||0)}</td><td>${esc((x.error_details||[]).slice(0,2).join(" | "))}</td><td>${esc(x.imported_by_email||"—")}</td><td>${esc(x.created_at?.slice(0,10)||"—")}</td></tr>`).join("")||emptyRow(8);}
   async function renderEmployees(){if(!["admin","manager"].includes(profile?.role))return;const {data}=await sb.from("profiles").select("id,email,full_name,role").order("created_at");$("#employeesTable").innerHTML=(data||[]).map(p=>`<tr><td>${esc(p.full_name)}</td><td>${esc(p.email)}</td><td>${esc(p.role)}</td><td>${p.id===session.user.id?"Current user":profile?.role!=="admin"?"View only":`<select data-role-user="${p.id}"><option ${p.role==="employee"?"selected":""}>employee</option><option ${p.role==="manager"?"selected":""}>manager</option><option ${p.role==="admin"?"selected":""}>admin</option></select>`}</td></tr>`).join("")||emptyRow(4);$$("[data-role-user]").forEach(el=>el.addEventListener("change",async()=>{const {error}=await sb.from("profiles").update({role:el.value}).eq("id",el.dataset.roleUser);if(error)alert(friendlyDbError(error));else{await audit("role_updated","profile",{user_id:el.dataset.roleUser,role:el.value});await renderEmployees();}}));}
   async function renderAudit(){if(!["admin","manager"].includes(profile?.role))return;const {data}=await sb.from("audit_logs").select("*,profiles(full_name,email)").order("created_at",{ascending:false}).limit(300);$("#auditTable").innerHTML=(data||[]).map(a=>`<tr><td>${esc(a.created_at?.replace("T"," ").slice(0,19))}</td><td>${esc(a.profiles?.full_name||a.profiles?.email||"—")}</td><td>${esc(a.action)}</td><td>${esc(a.entity)}</td><td>${esc(JSON.stringify(a.details||{}))}</td></tr>`).join("")||emptyRow(5);}
-  function nav(page){$$(".page").forEach(p=>p.classList.add("hidden"));$("#"+page+"Page").classList.remove("hidden");$$(".nav-item").forEach(n=>n.classList.toggle("active",n.dataset.page===page));$("#pageTitle").textContent=({dashboard:"Dashboard",orders:"Removal Orders",shipments:"Shipment Tracker",receipts:"Warehouse Receipts",fees:"Amazon Removal Fees",sap:"PO & SAP Tracker",claims:"Amazon Claims",reports:"Reports & Imports",employees:"Employee Management",audit:"Audit Logs"})[page]||"Dashboard";}
+  function nav(page){$$(".page").forEach(p=>p.classList.add("hidden"));$("#"+page+"Page").classList.remove("hidden");$$(".nav-item").forEach(n=>n.classList.toggle("active",n.dataset.page===page));$("#pageTitle").textContent=({dashboard:"Dashboard",orders:"Removal Orders",shipments:"Shipment Tracker",receipts:"Warehouse Receipts",fees:"Amazon Removal Fees",sap:"PO & SAP Tracker",claims:"Amazon Claims",reconciliation:"Reconciliation",reports:"Reports & Imports",employees:"Employee Management",audit:"Audit Logs"})[page]||"Dashboard";}
   async function addImport(file,type,read,accepted){const {error}=await sb.from("import_batches").insert({file_name:file.name,report_type:type,rows_read:read,rows_accepted:accepted,rejected_count:importProblemCount,error_details:importProblems,imported_by:session.user.id,imported_by_email:session.user.email});if(error)throw error;await audit("report_imported","import_batch",{file:file.name,type,rows_read:read,rows_accepted:accepted,rejected_count:importProblemCount});}
   const importProblems=[];let importProblemCount=0;
-  function masterFor(sku,fnsku,asin){const match=uniqueMap(cache.mappings,[{field:'fnsku',label:'FNSKU',value:fnsku},{field:'sku',label:'SKU',value:sku},{field:'asin',label:'ASIN',value:asin}].filter(k=>k.value));return {material_code:match.row?.material_code||'',title:match.row?.title||'',conflict:match.conflict};}
+  function masterFor(sku,fnsku,asin){const match=uniqueMap(cache.mappings,[{field:'fnsku',label:'FNSKU',value:fnsku},{field:'sku',label:'SKU',value:sku},{field:'asin',label:'ASIN',value:asin}].filter(k=>k.value));return {material_code:match.row?.material_code||'',title:match.row?.title||'',pack:num(match.row?.raw_data?.['Pack Of'])||0,conflict:match.conflict};}
+  const packOfRow=r=>num(r.raw_data?.['Pack Of'])||num(masterFor(r.sku,null,r.asin).pack)||1;
+  const unitsOf=r=>(r.sent_units!=null?num(r.sent_units):num(r.quantity)*packOfRow(r));
   const canEdit=()=>["admin","manager"].includes(profile?.role);
   function writeOpts(opts){return canEdit()?opts:{...opts,ignoreDuplicates:true};}
   function friendlyDbError(err){const m=String(err?.message||err||""),c=String(err?.code||"");if(c==="42501"||/row-level security|permission denied/i.test(m))return "You do not have permission for this action. Ask a manager or admin to do it.";if(c==="23505"||/duplicate key/i.test(m))return "This record already exists and was skipped.";return m;}
@@ -218,7 +220,39 @@
       const rawFee=pick(r,"removal-fee","removal fee"),currency=pick(r,"currency");if(String(rawFee).trim()!==""&&currency){const feeRow={order_id:x.order_id,sku:x.sku||"",fnsku:x.fnsku||"",fee_amount:num(rawFee),currency,fee_date:x.request_date,source_file:file.name,raw_data:r};const {data:feeRows,error:feeError}=await sb.from("amazon_removal_fees").upsert(feeRow,writeOpts({onConflict:"order_id,sku,fnsku"})).select("id");if(feeError)problem(file,i+2,`Fee: ${friendlyDbError(feeError)}`);else if(feeRows?.length||canEdit())feeAccepted++;}}
     await addImport(file,"removal_order_detail",rows.length,accepted);return {accepted,feeAccepted,skipped};}
   async function importShipments(rows,file){let accepted=0,skipped=0;for(let i=0;i<rows.length;i++){const r=rows[i],order_id=pick(r,"order-id","order id"),tracking_number=pick(r,"tracking-number","tracking number"),fnsku=pick(r,"fnsku"),sku=pick(r,"sku"),asin=pick(r,"asin");if(!order_id||!tracking_number){problem(file,i+2,'Missing Order ID or Tracking Number');continue;}const order=cache.orders.find(o=>o.order_id===order_id&&((fnsku&&o.fnsku===fnsku)||(sku&&o.sku===sku)));const match=uniqueMap(cache.mappings,[{field:'fnsku',label:'FNSKU',value:fnsku},{field:'sku',label:'SKU',value:sku},{field:'asin',label:'ASIN',value:asin}].filter(x=>x.value));const mapped=match.row;const x={order_id,tracking_number,fnsku:fnsku||'',sku:sku||order?.sku||mapped?.sku||'',material_code:order?.material_code||mapped?.material_code||null,mapping_status:match.conflict?'conflict':(sku||order?.sku||mapped)?'matched':'unmapped',shipped_qty:num(pick(r,"shipped-quantity","quantity-shipped","quantity")),amazon_status:pick(r,"status","shipment-status"),shipment_date:dateISO(pick(r,"shipment-date","shipped-date")),disposition:pick(r,"disposition"),raw_data:r};const {data:shipRows,error}=await sb.from("shipment_lines").upsert(x,writeOpts({onConflict:"order_id,tracking_number,sku,fnsku,shipped_qty"})).select("id");if(error)problem(file,i+2,friendlyDbError(error));else if(shipRows?.length||canEdit())accepted++;else skipped++;}await addImport(file,"removal_shipment_detail",rows.length,accepted);return {accepted,skipped};}
-  async function importMappings(rows,file){let accepted=0;for(let i=0;i<rows.length;i++){const r=rows[i],x={asin:pick(r,"asin","asin.1"),sku:pick(r,"sku"),fnsku:pick(r,"fnsku"),material_code:pick(r,"material code","material-code","material_code"),title:pick(r,"title","product name","product title"),case_size:num(pick(r,"case size","case_size"))||null,channel:pick(r,"channel"),combo_check:pick(r,"combo check","combo_check"),new_mrp:pick(r,"new mrp","new_mrp")?num(pick(r,"new mrp","new_mrp")):null,mapping_version:file.name,raw_data:r};if(!x.fnsku&&!x.sku&&!x.asin){problem(file,i+2,'No ASIN, SKU or FNSKU identifier');continue;}const {error}=await sb.from("product_mappings").insert(x);if(!error)accepted++;else problem(file,i+2,friendlyDbError(error));}await addImport(file,"product_mapping_master",rows.length,accepted);return {accepted};}
+  async function importMappings(rows,file){
+    let accepted=0,updated=0,skipped=0;
+    const cleanTitle=s=>String(s??"").replace(/\s*-?\s*INACTIVE\s*$/i,"").trim();
+    const seen=new Set();
+    const fields=["asin","sku","fnsku","material_code","title","case_size","channel","combo_check","new_mrp","status"];
+    for(let i=0;i<rows.length;i++){
+      const r=rows[i];
+      const rawTitle=pick(r,"title","product name","product title");
+      const x={asin:pick(r,"asin","asin.1")||null,sku:pick(r,"sku")||null,fnsku:pick(r,"fnsku")||null,material_code:pick(r,"material code","material-code","material_code")||null,title:cleanTitle(rawTitle)||null,case_size:num(pick(r,"case size","case_size"))||null,channel:pick(r,"channel")||null,combo_check:pick(r,"combo check","combo_check")||null,new_mrp:pick(r,"new mrp","new_mrp")?num(pick(r,"new mrp","new_mrp")):null,mapping_version:file.name,raw_data:r};
+      if(!x.fnsku&&!x.sku&&!x.asin){problem(file,i+2,'No ASIN, SKU or FNSKU identifier');continue;}
+      const explicit=pick(r,"status");
+      x.status=explicit?explicit:(/inactive/i.test(String(rawTitle??""))?"Inactive":(!x.fnsku?"Pending FNSKU":"Active"));
+      const key=x.fnsku?`F|${norm(x.fnsku)}`:`A|${norm(x.asin)}`;
+      if(seen.has(key)){skipped++;continue;}
+      seen.add(key);
+      const list=cache.mappings||[];
+      let existing=x.fnsku?list.find(m=>norm(m.fnsku)===norm(x.fnsku)):null;
+      if(!existing&&norm(x.asin))existing=list.find(m=>!norm(m.fnsku)&&norm(m.asin)===norm(x.asin));
+      if(existing){
+        const changed=fields.some(f=>String(x[f]??"")!==String(existing[f]??""))||String(x.mapping_version)!==String(existing.mapping_version??"");
+        if(!changed){skipped++;continue;}
+        if(!canEdit()){skipped++;continue;}
+        const {error}=await sb.from("product_mappings").update(x).eq("id",existing.id);
+        if(error)problem(file,i+2,friendlyDbError(error));else{updated++;Object.assign(existing,x);}
+        continue;
+      }
+      const {data,error}=await sb.from("product_mappings").insert(x).select("id");
+      if(error)problem(file,i+2,friendlyDbError(error));
+      else{accepted++;list.push({...x,id:data?.[0]?.id});cache.mappings=list;}
+    }
+    await addImport(file,"product_mapping_master",rows.length,accepted+updated);
+    return {accepted,updated,skipped};
+  }
   async function importSTR(rows,file,label="str_fc_removal_only"){
     const eligible=rows.filter(r=>norm(pick(r,"Transaction Type","transaction-type","transaction type"))==="fc_removal");let accepted=0,skipped=0,updated=0;
     const strKeyOf=o=>[norm(o.transaction_id),norm(o.invoice_no),norm(o.asin),num(o.quantity)].join('|');
@@ -226,16 +260,16 @@
     for(let i=0;i<eligible.length;i++){const r=eligible[i],transaction_id=pick(r,"Transaction Id","transaction-id","transaction id"),sourceSku=pick(r,"Sku","SKU"),asin=pick(r,"Asin","ASIN"),fnsku=pick(r,"FNSKU");if(!transaction_id){problem(file,i+2,'FC_REMOVAL row has no Transaction ID');continue;}
       const match=uniqueMap(cache.mappings,[{field:'sku',label:'SKU',value:sourceSku},{field:'fnsku',label:'FNSKU',value:fnsku},{field:'asin',label:'ASIN',value:asin}].filter(x=>x.value));const mapped=match.row;const sku=sourceSku||mapped?.sku||null;const material_code=pick(r,"Material Code","material-code","material code")||sourceSku||mapped?.sku||mapped?.material_code||null;const invoice=pick(r,"Invoice Number","invoice-number","invoice no"),qty=pick(r,"Quantity","transaction-quantity");
       const source_line_key=[transaction_id,invoice,sourceSku,asin,fnsku,qty,i].map(v=>encodeURIComponent(String(v??''))).join('|');
-      const x={source_line_key,transaction_id,invoice_no:invoice,material_code,transaction_date:dateISO(pick(r,"Invoice Date","invoice date","Date","transaction-date")),invoice_date:dateISO(pick(r,"Invoice Date","invoice date")),invoice_value:pick(r,"Invoice Value","invoice value")!==""?num(pick(r,"Invoice Value","invoice value")):null,taxable_value:pick(r,"Taxable Value","taxable value")!==""?num(pick(r,"Taxable Value","taxable value")):null,quantity:num(qty),hsn:pick(r,"Hsn Code","hsn code","hsn"),gst_rate:num(pick(r,"Igst Rate","igst rate","gst-rate"))||null,transaction_type:"FC_REMOVAL",ship_from_fc:pick(r,"Ship From Fc","ship from fc"),ship_from_storage_location:pick(r,"SAP Storage location"),ship_from_plant_code:pick(r,"SAP plant code'"),sku,asin,order_id:pick(r,"Order Id","order id"),receiver_gstin:pick(r,"Gstin Of Receiver","gstin of receiver"),actual_qty:num(pick(r,"ACTUAL QTY","actual qty")),invoice_quantity:num(pick(r,"Invoice Quantity","invoice quantity")),irn_status:pick(r,"Irn Filing Status","irn filing status"),po_number:pick(r,"Po Number","po number"),delivery_no:pick(r,"Delivery No","delivery no"),billing_document:pick(r,"Billing Document","billing document"),migo_no:pick(r,"MIGO No","migo no"),sap_status:pick(r,"Status","status"),mapping_status:match.conflict?'conflict':(sourceSku||mapped)?'matched':'unmapped',raw_data:r};
+      const x={source_line_key,transaction_id,invoice_no:invoice,material_code,transaction_date:dateISO(pick(r,"Invoice Date","invoice date","Date","transaction-date")),invoice_date:dateISO(pick(r,"Invoice Date","invoice date")),invoice_value:pick(r,"Invoice Value","invoice value")!==""?num(pick(r,"Invoice Value","invoice value")):null,taxable_value:pick(r,"Taxable Value","taxable value")!==""?num(pick(r,"Taxable Value","taxable value")):null,quantity:num(qty),sent_units:num(qty)*(num(pick(r,'Pack Of','pack of'))||num(match.row?.raw_data?.['Pack Of'])||1),hsn:pick(r,"Hsn Code","hsn code","hsn"),gst_rate:num(pick(r,"Igst Rate","igst rate","gst-rate"))||null,transaction_type:"FC_REMOVAL",ship_from_fc:pick(r,"Ship From Fc","ship from fc"),ship_from_storage_location:pick(r,"SAP Storage location"),ship_from_plant_code:pick(r,"SAP plant code'"),sku,asin,order_id:pick(r,"Order Id","order id"),receiver_gstin:pick(r,"Gstin Of Receiver","gstin of receiver"),actual_qty:num(pick(r,"ACTUAL QTY","actual qty")),invoice_quantity:num(pick(r,"Invoice Quantity","invoice quantity")),irn_status:pick(r,"Irn Filing Status","irn filing status"),po_number:pick(r,"Po Number","po number","SAP PO NO","SAP PO No","PO NO"),delivery_no:pick(r,"Delivery No","delivery no","DELIVERY NO"),billing_document:pick(r,"Billing Document","billing document","INVOICE NO","INVOICE No"),migo_no:pick(r,"MIGO No","migo no","MIGO NO"),po_date:dateISO(pick(r,"created date","Created Date","PO Created Date","po created date")),sap_status:pick(r,"Status","status"),mapping_status:match.conflict?'conflict':(sourceSku||mapped)?'matched':'unmapped',raw_data:r};
       const existing=strIndex.get(strKeyOf(x));
-      if(existing){const patch={};["po_number","delivery_no","billing_document","migo_no","sap_status","irn_status"].forEach(k=>{if(x[k]!==undefined&&x[k]!==null&&String(x[k]).trim()!==""&&norm(x[k])!==norm(existing[k]))patch[k]=String(x[k]);});["sku","material_code"].forEach(k=>{if(x[k]&&String(x[k]).trim()!==""&&!norm(existing[k]))patch[k]=String(x[k]);});if(num(x.invoice_quantity)>0&&num(x.invoice_quantity)!==num(existing.invoice_quantity))patch.invoice_quantity=num(x.invoice_quantity);
+      if(existing){const patch={};["po_number","delivery_no","billing_document","migo_no","sap_status","irn_status","po_date"].forEach(k=>{if(x[k]!==undefined&&x[k]!==null&&String(x[k]).trim()!==""&&norm(x[k])!==norm(existing[k]))patch[k]=String(x[k]);});["sku","material_code"].forEach(k=>{if(x[k]&&String(x[k]).trim()!==""&&!norm(existing[k]))patch[k]=String(x[k]);});if(num(x.invoice_quantity)>0&&num(x.invoice_quantity)!==num(existing.invoice_quantity))patch.invoice_quantity=num(x.invoice_quantity);if(num(x.sent_units)>0&&num(x.sent_units)!==num(existing.sent_units))patch.sent_units=num(x.sent_units);
         if(!Object.keys(patch).length)skipped++;else if(!canEdit())skipped++;else{const {error:uErr}=await sb.from("str_records").update(patch).eq("id",existing.id);if(uErr)problem(file,i+2,friendlyDbError(uErr));else{updated++;Object.assign(existing,patch);}}}
       else{const {data:strRows,error}=await sb.from("str_records").upsert(x,writeOpts({onConflict:"source_line_key"})).select("id");if(error)problem(file,i+2,friendlyDbError(error));else if(strRows?.length){accepted++;strIndex.set(strKeyOf(x),{...x,id:strRows[0].id});}else skipped++;}
     }
     await addImport(file,label,rows.length,accepted);return {eligible:eligible.length,accepted,skipped,updated};
   }
   async function importFees(rows,file,cols={}){let accepted=0;for(const r of rows){const order=pick(r,cols.order||"order-id","order-id","removal-order-id","order id"),fee=pick(r,cols.fee||"fee-amount","fee-amount","amount","removal-fee"),currency=pick(r,cols.currency||"currency")||"INR",date=pick(r,cols.date||"posted-date","posted-date","fee-date")||null;if(!order||fee==="")continue;const {data:ord}=await sb.from("removal_orders").select("order_id").eq("order_id",order).limit(1);if(!ord?.length)continue;const {data:fr,error}=await sb.from("amazon_removal_fees").upsert({order_id:order,sku:"",fnsku:"",fee_amount:num(fee),currency,fee_date:date,source_file:file.name,raw_data:r},writeOpts({onConflict:"order_id,sku,fnsku"})).select("id");if(!error&&(fr?.length||canEdit()))accepted++;}await addImport(file,"amazon_removal_fees_only",rows.length,accepted);return accepted;}
-  async function handleAmazonImport(e){e.preventDefault();const fd=new FormData(e.target),file=fd.get("file"),type=fd.get("type");try{importProblems.length=0;importProblemCount=0;const rows=await readReportFile(file);let result={};if(type==="orders")result=await importOrders(rows,file);if(type==="shipments")result=await importShipments(rows,file);if(type==="str")result=await importSTR(rows,file);if(type==="str_master")result=await importSTR(rows,file,"str_master_sap");if(type==="fee")result={accepted:await importFees(rows,file)};if(type==="mapping")result=await importMappings(rows,file);const rejected=importProblemCount;const detail=importProblems.slice(0,8).join('\n');say("importMsg",`Processed ${rows.length} rows from ${file.name}. ${result?.eligible!=null?`FC_REMOVAL rows: ${result.eligible}. `:""}Accepted: ${result?.accepted??0}.${result?.skipped?` Already present and skipped: ${result.skipped}.`:""}${result?.updated?` Updated existing rows (PO/SAP fields): ${result.updated}.`:""} Rejected / needs review: ${rejected}.${result?.feeAccepted!=null?` Removal fee lines captured: ${result.feeAccepted}.`:""}${detail?'\n'+detail:''}${rejected>8?'\nMore row errors are available in the browser console.':''}`,rejected===0);if(rejected>8)console.warn('Import row errors',importProblems);await loadAll();}catch(err){say("importMsg",err.message||String(err));}}
+  async function handleAmazonImport(e){e.preventDefault();const fd=new FormData(e.target),file=fd.get("file"),type=fd.get("type");try{importProblems.length=0;importProblemCount=0;const rows=await readReportFile(file);let result={};if(type==="orders")result=await importOrders(rows,file);if(type==="shipments")result=await importShipments(rows,file);if(type==="str")result=await importSTR(rows,file);if(type==="str_master")result=await importSTR(rows,file,"str_master_sap");if(type==="fee")result={accepted:await importFees(rows,file)};if(type==="mapping")result=await importMappings(rows,file);const rejected=importProblemCount;const detail=importProblems.slice(0,8).join('\n');say("importMsg",`Processed ${rows.length} rows from ${file.name}. ${result?.eligible!=null?`FC_REMOVAL rows: ${result.eligible}. `:""}Accepted: ${result?.accepted??0}.${result?.skipped?` Already present and skipped: ${result.skipped}.`:""}${result?.updated?` Updated existing rows: ${result.updated}.`:""} Rejected / needs review: ${rejected}.${result?.feeAccepted!=null?` Removal fee lines captured: ${result.feeAccepted}.`:""}${detail?'\n'+detail:''}${rejected>8?'\nMore row errors are available in the browser console.':''}`,rejected===0);if(rejected>8)console.warn('Import row errors',importProblems);await loadAll();}catch(err){say("importMsg",err.message||String(err));}}
   async function handleFeeUpload(e){e.preventDefault();const fd=new FormData(e.target),file=fd.get("file");try{const rows=await readReportFile(file);const accepted=await importFees(rows,file,{order:fd.get("order_col"),fee:fd.get("fee_col"),currency:fd.get("currency_col"),date:fd.get("date_col")});say("feeMsg",`Imported ${accepted} fee rows linked to known Amazon removal orders.`,true);await loadAll();}catch(err){say("feeMsg",err.message);}}
 
   async function handleReceipt(e){
@@ -250,10 +284,144 @@
     $("#loginBtn").onclick=async()=>{const {error}=await sb.auth.signInWithPassword({email:$("#loginEmail").value,password:$("#loginPassword").value});say("loginMsg",error?.message||"Signing in…",!error);};
     $("#logoutBtn").onclick=()=>sb.auth.signOut();
     $$("#nav [data-page]").forEach(b=>b.onclick=()=>nav(b.dataset.page));$$("[data-goto]").forEach(b=>b.onclick=()=>nav(b.dataset.goto));
-    $("#amazonImportForm").onsubmit=handleAmazonImport;$("#receiptForm").onsubmit=handleReceipt;$("#poReceiptForm").onsubmit=handlePOReceipt;$("#poLookupValue").oninput=renderPOLineEditor;$("#poReceiptForm").elements.receipt_date.value=today();$("#claimForm").onsubmit=handleClaim;
+    $("#amazonImportForm").onsubmit=handleAmazonImport;$("#receiptForm").onsubmit=handleReceipt;$("#invoiceImportForm").onsubmit=async e=>{e.preventDefault();const files=e.target.elements.files.files;if(!files.length)return;try{await importInvoiceFiles(files);}catch(err){say("invoiceImportMsg",friendlyDbError(err));}};$("#reconStatus").onchange=renderRecon;document.addEventListener("click",e=>{if(e.target.closest&&e.target.closest(".nav-item"))setTimeout(freezeAll,80);});window.addEventListener("resize",()=>freezeAll());$("#reconSearch").oninput=renderRecon;$("#exportRecon").onclick=()=>exportTable("reconTable","reconciliation.xlsx");$("#poReceiptForm").onsubmit=handlePOReceipt;$("#poLookupValue").oninput=renderPOLineEditor;$("#poReceiptForm").elements.receipt_date.value=today();$("#claimForm").onsubmit=handleClaim;
     $("#orderSearch").oninput=renderOrders;$("#shipmentSearch").oninput=renderShipments;$("#exportOrders").onclick=()=>exportTable("ordersTable","amazon_removal_orders.xlsx");$("#exportShipments").onclick=()=>exportTable("shipmentsTable","amazon_shipment_tracker.xlsx");$("#exportReceipts").onclick=()=>exportTable("receiptTable","warehouse_receipt_tracker.xlsx");$("#exportSAP").onclick=()=>exportTable("sapTable","sap_po_tracker.xlsx");$("#monthFilter").onchange=renderAll;$("#fyFilter").onchange=renderAll;
     
     $("#receiptForm").elements.receipt_date.value=today();$("#receiptLookupType").addEventListener("change",renderReceiptSelector);$("#receiptLookupValue").addEventListener("input",renderReceiptLineEditor);
+  }
+  // ---------- Invoices (bulk ZIP) and reconciliation ----------
+  const libLoads={};
+  function loadScriptOnce(url){if(!libLoads[url])libLoads[url]=new Promise((res,rej)=>{const s=document.createElement("script");s.src=url;s.onload=res;s.onerror=()=>rej(new Error("Could not load "+url));document.head.appendChild(s);});return libLoads[url];}
+  async function ensureJSZip(){await loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js");return window.JSZip;}
+  async function ensurePdfJs(){await loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js");window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";return window.pdfjsLib;}
+  async function sha256Hex(buf){const d=await crypto.subtle.digest("SHA-256",buf);return [...new Uint8Array(d)].map(b=>b.toString(16).padStart(2,"0")).join("");}
+  async function pdfText(bytes,pdfjs){const doc=await pdfjs.getDocument({data:bytes}).promise;let out="";for(let p=1;p<=doc.numPages;p++){const page=await doc.getPage(p);const c=await page.getTextContent();out+=c.items.map(i=>i.str).join(" ")+"\n";}return out;}
+  function invoiceDateISO(s){const m=/(\d{2})\.(\d{2})\.(\d{4})/.exec(s||"");return m?`${m[3]}-${m[2]}-${m[1]}`:null;}
+  // RA rule: text between the first and second hyphen (ZAXQT-<key>-<location>-<suffix>).
+  // Internal hyphens inside the key are kept; the last two parts (location, suffix) are dropped.
+  function raKeyOf(ra){const p=String(ra||"").split("-");if(p.length<4||p[0].toUpperCase()!=="ZAXQT")return {key:null,ok:false};return {key:p.slice(1,p.length-2).join("-"),ok:true};}
+  function parseInvoiceText(t){
+    const g=re=>{const m=re.exec(t);return m?m[1].trim():null;};
+    const invoice_no=g(/Invoice Number\s*:?\s*([A-Z0-9]+-T-\d+)/i)||g(/\b([A-Z0-9]{2,6}-T-\d+)\b/);
+    const shipment_id=g(/Shipment ID\s*:?\s*(\d{6,})/i);
+    const ra_number=g(/RA No\.?\s*:?\s*(\S+)/i);
+    const rk=raKeyOf(ra_number);
+    return {invoice_no,invoice_date:invoiceDateISO(g(/Invoice Date\s*:?\s*(\d{2}\.\d{2}\.\d{4})/i)),shipment_id,ra_number,ra_key:rk.key,ra_ok:rk.ok,order_number:g(/Order Number\s*:?\s*(\S+)/i),asin:g(/\b(B0[A-Z0-9]{8})\b/)};
+  }
+  async function importInvoiceFiles(files){
+    const msg=$("#invoiceImportMsg"),totals=$("#invoiceImportTotals");
+    const T={read:0,accepted:0,duplicates:0,failed:0,unmatched:0,zipSkipped:0};const problems=[];
+    say("invoiceImportMsg","Reading invoices...",true);totals.innerHTML="";
+    const pdfjs=await ensurePdfJs();
+    const seenZip=new Set((cache.zipImports||[]).map(z=>z.file_hash));
+    const knownInv=new Set((cache.invoices||[]).map(i=>norm(i.invoice_no)));
+    const knownOrders=new Set((cache.orders||[]).map(o=>norm(o.order_id)));
+    for(const file of [...files]){
+      const isZip=/\.zip$/i.test(file.name);
+      const buf=await file.arrayBuffer();
+      const fileHash=await sha256Hex(buf);
+      if(seenZip.has(fileHash)){T.zipSkipped++;problems.push(`${file.name}: already uploaded, skipped`);continue;}
+      const pdfs=[];
+      if(isZip){const JSZip=await ensureJSZip();const z=await JSZip.loadAsync(buf);for(const e of Object.values(z.files)){if(!e.dir&&/\.pdf$/i.test(e.name))pdfs.push({name:e.name.split("/").pop(),bytes:await e.async("uint8array")});}}
+      else pdfs.push({name:file.name,bytes:new Uint8Array(buf)});
+      let zAcc=0,zDup=0,zFail=0,zUnm=0;
+      for(const p of pdfs){
+        T.read++;
+        try{
+          const f=parseInvoiceText(await pdfText(p.bytes,pdfjs));
+          if(!f.invoice_no){T.failed++;zFail++;problems.push(`${p.name}: invoice number not found`);continue;}
+          if(knownInv.has(norm(f.invoice_no))){T.duplicates++;zDup++;continue;}
+          const matched=!!f.ra_key&&knownOrders.has(norm(f.ra_key));
+          if(!matched){T.unmatched++;zUnm++;}
+          const row={invoice_no:f.invoice_no,invoice_date:f.invoice_date,shipment_id:f.shipment_id,ra_number:f.ra_number,ra_key:f.ra_key,order_number:f.order_number,asin:f.asin,source_zip:isZip?file.name:null,source_pdf:p.name,file_hash:fileHash,match_status:!f.ra_ok?"ra_format_review":matched?"matched_order":"unmatched"};
+          const {data,error}=await sb.from("amazon_invoices").upsert(row,{onConflict:"invoice_no",ignoreDuplicates:true}).select("id");
+          if(error){T.failed++;zFail++;problems.push(`${p.name}: ${friendlyDbError(error)}`);continue;}
+          if(!data?.length){T.duplicates++;zDup++;continue;}
+          T.accepted++;zAcc++;knownInv.add(norm(f.invoice_no));
+        }catch(err){T.failed++;zFail++;problems.push(`${p.name}: ${err.message||err}`);}
+      }
+      const {error:zErr}=await sb.from("invoice_zip_imports").insert({file_hash:fileHash,file_name:file.name,pdf_count:pdfs.length,accepted:zAcc,duplicates:zDup,failed:zFail,unmatched:zUnm});
+      if(zErr)problems.push(`${file.name}: import log not saved (${friendlyDbError(zErr)})`);
+      seenZip.add(fileHash);
+    }
+    await loadAll();
+    say("invoiceImportMsg",`Done. Read ${T.read}, accepted ${T.accepted}, duplicates ${T.duplicates}, failed ${T.failed}, unmatched ${T.unmatched}.`,T.failed===0);
+    totals.innerHTML=`<div class="kpi-grid compact"><article class="kpi"><span>Invoices read</span><b>${fmt(T.read)}</b></article><article class="kpi"><span>Accepted (new)</span><b>${fmt(T.accepted)}</b></article><article class="kpi"><span>Updated</span><b>0</b><small>Invoices are not changed after first import</small></article><article class="kpi"><span>Duplicates skipped</span><b>${fmt(T.duplicates)}</b></article><article class="kpi"><span>Failed</span><b>${fmt(T.failed)}</b></article><article class="kpi"><span>Unmatched</span><b>${fmt(T.unmatched)}</b><small>RA key has no removal order yet</small></article><article class="kpi"><span>ZIP files already uploaded</span><b>${fmt(T.zipSkipped)}</b></article></div>${problems.length?`<p class="muted">${problems.map(esc).join("<br>")}</p>`:""}`;
+  }
+  function reconRows(){
+    const orders=cache.orders||[],ships=cache.shipments||[],recs=cache.receipts||[],fees=cache.fees||[],invs=cache.invoices||[],strs=cache.str||[],maps=cache.mappings||[];
+    const shipBy=new Map();ships.forEach(s=>{const k=`${norm(s.order_id)}|${norm(s.fnsku)}`;shipBy.set(k,[...(shipBy.get(k)||[]),s]);});
+    const recBy=new Map();recs.forEach(r=>recBy.set(r.shipment_line_id,[...(recBy.get(r.shipment_line_id)||[]),r]));
+    const feeBy=new Map();fees.forEach(f=>{const k=`${norm(f.order_id)}|${norm(f.fnsku)}`;feeBy.set(k,[...(feeBy.get(k)||[]),f]);});
+    const asinsFor=fn=>new Set(maps.filter(m=>norm(m.fnsku)===norm(fn)&&m.asin).map(m=>norm(m.asin)));
+    return orders.map(o=>{
+      const key=`${norm(o.order_id)}|${norm(o.fnsku)}`;
+      const lines=shipBy.get(key)||[];
+      const asins=asinsFor(o.fnsku);
+      const myInv=invs.filter(i=>norm(i.ra_key)===norm(o.order_id)&&(!asins.size||!i.asin||asins.has(norm(i.asin))));
+      const shipIds=[...new Set(myInv.map(i=>String(i.shipment_id||"")).filter(Boolean))];
+      const myStr=strs.filter(r=>shipIds.includes(String(r.transaction_id))&&(!asins.size||asins.has(norm(r.asin))));
+      const strUnits=myStr.reduce((a,r)=>a+unitsOf(r),0);
+      const po=myStr.find(r=>r.po_number)||myStr[0]||{};
+      const shipped=num(o.shipped_qty);
+      const shipTotal=lines.reduce((a,s)=>a+num(s.shipped_qty),0);
+      const returned=lines.filter(s=>/return/i.test(s.amazon_status||"")).reduce((a,s)=>a+num(s.shipped_qty),0);
+      const expected=Math.max(0,shipped-returned);
+      let phys=0,short=0,notrec=0;
+      lines.forEach(s=>(recBy.get(s.id)||[]).forEach(r=>{phys+=num(r.good_qty)+num(r.damaged_qty)+num(r.near_expiry_qty)+num(r.expired_qty);short+=num(r.short_qty);notrec+=num(r.not_received_qty);}));
+      const pending=Math.max(0,expected-phys-short-notrec);
+      const fl=feeBy.get(key)||[];
+      const fee=fl.length?fl.reduce((a,f)=>a+num(f.fee_amount),0):null;
+      const cur=[...new Set(fl.map(f=>f.currency).filter(Boolean))].join(", ");
+      const tracking=[...new Set(lines.map(s=>s.tracking_number).filter(Boolean))].join(", ");
+      let status;
+      if(!shipped)status="Not shipped";
+      else if(!myInv.length)status="No invoice";
+      else if(!myStr.length)status="STR not found (FC_REMOVAL)";
+      else if(strUnits!==shipped)status="Variance: STR vs shipped";
+      else if(shipTotal!==shipped)status="Variance: shipment vs order";
+      else status="Matched";
+      return {o,invs:myInv,shipIds,strUnits,po,shipTotal,returned,expected,phys,short,notrec,pending,fee,cur,tracking,status};
+    });
+  }
+  function tagFor(s){const t=String(s||"");if(/^(matched|complete)$/i.test(t))return "ok";if(/variance|partial|pending|not shipped/i.test(t))return "warn";if(/no invoice|not found|exception|awaiting/i.test(t))return "bad";return "neutral";}
+  function renderDashCharts(){
+    const box=$("#dashCharts");if(!box)return;
+    const now=new Date(),months=[];for(let k=5;k>=0;k--){const d=new Date(now.getFullYear(),now.getMonth()-k,1);months.push(`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`);}
+    const inv=new Map(months.map(m=>[m,new Set()])),ship=new Map(months.map(m=>[m,0]));
+    (cache.str||[]).forEach(r=>{const m=String(r.invoice_date||"").slice(0,7);if(inv.has(m)&&r.invoice_no)inv.get(m).add(norm(r.invoice_no));});
+    (cache.shipments||[]).forEach(s=>{const m=String(s.shipment_date||"").slice(0,7);if(ship.has(m))ship.set(m,ship.get(m)+num(s.shipped_qty));});
+    const iv=months.map(m=>inv.get(m).size),sv=months.map(m=>ship.get(m));
+    const mi=Math.max(1,...iv),ms=Math.max(1,...sv);
+    const lbl=m=>{const [y,mo]=m.split("-");return new Date(+y,+mo-1,1).toLocaleString("en-GB",{month:"short"})+" "+y.slice(2);};
+    const cols=months.map((m,i)=>`<div class="bar-col"><div class="bar-val">${fmt(iv[i])} · ${fmt(sv[i])}</div><div class="pair"><div class="bar-inv" style="height:${Math.round(iv[i]/mi*100)}%" title="Invoices: ${fmt(iv[i])}"></div><div class="bar-ship" style="height:${Math.round(sv[i]/ms*100)}%" title="Shipped units: ${fmt(sv[i])}"></div></div><div class="bar-label">${lbl(m)}</div></div>`).join("");
+    const rows=reconRows(),total=rows.length,ok=rows.filter(r=>r.status==="Matched").length,exc=total-ok,deg=total?Math.round(ok/total*360):0;
+    const donut=total?`<div class="donut-wrap"><div class="donut" style="background:conic-gradient(#16a34a 0 ${deg}deg,#f59e0b ${deg}deg 360deg)"><div class="donut-center">${Math.round(ok/total*100)}%</div></div><div class="donut-legend"><div><i style="background:#16a34a"></i>Matched: ${fmt(ok)}</div><div><i style="background:#f59e0b"></i>Exceptions: ${fmt(exc)}</div><div class="muted">Total lines: ${fmt(total)}</div></div></div>`:`<p class="muted">No reconciliation lines yet. Upload removal orders, shipments and invoices.</p>`;
+    box.innerHTML=`<div class="panel chart-card"><h3>Monthly invoices and shipped units</h3><p class="muted">Last six months. Invoices counted by invoice date; shipped units from shipment date.</p><div class="legend"><span><i style="background:#2a7bc4"></i>Amazon invoices</span><span><i style="background:#14b8a6"></i>Shipped units</span></div><div class="bars">${cols}</div></div><div class="panel chart-card"><h3>Reconciliation status</h3><p class="muted">Share of order and product lines that are fully matched.</p>${donut}</div>`;
+  }
+  function freezeFirstColumns(table,n=3){
+    const rows=[...table.rows];if(!rows.length)return;
+    let left=0;const first=rows[0].cells;
+    for(let c=0;c<Math.min(n,first.length);c++){
+      const w=first[c].getBoundingClientRect().width;
+      if(!w)return;
+      rows.forEach(r=>{const cell=r.cells[c];if(cell){cell.classList.add("frozen");cell.style.left=left+"px";}});
+      left+=w;
+    }
+  }
+  function freezeAll(){
+    document.querySelectorAll(".table-wrap table").forEach(t=>{t.querySelectorAll(".frozen").forEach(c=>{c.classList.remove("frozen");c.style.left="";});freezeFirstColumns(t,3);});
+  }
+  function renderRecon(){
+    const tbl=$("#reconTable");if(!tbl)return;
+    const rows=reconRows();
+    const st=$("#reconStatus")?.value||"all",q=norm($("#reconSearch")?.value||"");
+    const shown=rows.filter(r=>(st==="all"||(st==="matched"?r.status==="Matched":r.status!=="Matched"))&&(!q||norm([r.o.order_id,r.o.sku,r.o.fnsku,r.tracking,r.invs.map(i=>i.invoice_no).join(" "),r.shipIds.join(" ")].join(" ")).includes(q)));
+    const sum=f=>shown.reduce((a,r)=>a+f(r),0);
+    const sumEl=$("#reconSummary");
+    if(sumEl)sumEl.innerHTML=`<div class="kpi-grid compact"><article class="kpi"><span>Order × product lines</span><b>${fmt(shown.length)}</b></article><article class="kpi"><span>Matched</span><b>${fmt(shown.filter(r=>r.status==="Matched").length)}</b></article><article class="kpi"><span>Exceptions</span><b>${fmt(shown.filter(r=>r.status!=="Matched").length)}</b></article><article class="kpi"><span>Order shipped units</span><b>${fmt(sum(r=>num(r.o.shipped_qty)))}</b></article><article class="kpi"><span>Returned to Amazon</span><b>${fmt(sum(r=>r.returned))}</b></article><article class="kpi"><span>Pending at warehouse</span><b>${fmt(sum(r=>r.pending))}</b></article></div>`;
+    tbl.querySelector("tbody").innerHTML=shown.map(r=>{const m=masterFor(r.o.sku,r.o.fnsku,null),po=r.po;return `<tr><td>${esc(r.o.order_id)}</td><td>${esc(r.o.sku||"—")}</td><td>${esc(r.o.fnsku||"—")}</td><td>${esc(m.title||"—")}</td><td>${esc(r.invs.map(i=>i.invoice_no).join(", ")||"—")}</td><td>${esc(r.invs.map(i=>i.invoice_date).filter(Boolean).join(", ")||"—")}</td><td>${esc(r.shipIds.join(", ")||"—")}</td><td>${esc([...new Set(r.invs.map(i=>i.ra_key).filter(Boolean))].join(", ")||"—")}</td><td>${fmt(r.strUnits)}</td><td>${esc(po.po_number||"Awaiting PO")}</td><td>${esc(po.delivery_no||"—")}</td><td>${esc(po.billing_document||"—")}</td><td>${esc(po.migo_no||"—")}</td><td>${fmt(r.o.requested_qty)}</td><td>${fmt(r.o.shipped_qty)}</td><td>${fmt(r.shipTotal)}</td><td>${fmt(r.returned)}</td><td>${fmt(r.expected)}</td><td>${fmt(r.phys)}</td><td>${fmt(r.short+r.notrec)}</td><td><b>${fmt(r.pending)}</b></td><td>${esc(r.tracking||"—")}</td><td>${r.fee==null?"—":esc(r.fee.toFixed(2))}</td><td>${esc(r.cur||"—")}</td><td><span class="tag ${tagFor(r.status)}">${esc(r.status)}</span></td></tr>`;}).join("")||emptyRow(25);
+    enhanceTable("reconTable");freezeAll();
   }
   document.addEventListener("DOMContentLoaded",()=>{bind();init();});
 })();
