@@ -187,6 +187,22 @@ The **PO & SAP Tracker** page shows one row per PO and SKU:
 
 **One-time database step:** run `po_tracker_setup.sql` once in SQL Editor. It creates the receipt table, its permissions and the audit log. It deletes no data.
 
+## Invoices and reconciliation (current)
+
+**Invoice upload:** Reports & Imports → *Amazon removal tax invoices (bulk ZIP)*. Upload one or more ZIP files (or single PDFs). Each PDF is read in the browser. Invoice number, invoice date, shipment ID, RA number, ASIN and order number are extracted. Invoices already in the system and ZIP files already uploaded are skipped. The result shows read, accepted, updated, duplicates, failed and unmatched counts.
+
+**RA matching key:** the text between the first and second hyphen of the RA number. Example: `ZAXQT-Xqa4dfs578-BOM5-1` gives `Xqa4dfs578`. The prefix `ZAXQT-` and the location and final suffix are dropped. If the RA number does not follow this structure, the invoice is flagged for review instead of being guessed.
+
+**Matching:** invoice RA key = Removal Order ID (Removal Order Detail). Invoice Shipment ID = STR Transaction ID (FC_REMOVAL only). Invoice ASIN is linked to the FNSKU through the Product Mapping Master.
+
+**Reconciliation page:** one row per removal order and product (FNSKU). It shows the invoice, STR units (STR Quantity × Pack Of), SAP references, requested and shipped units, shipment total, returned to Amazon, expected at warehouse (shipped minus returned to Amazon), physical received, short and not received, pending, tracking numbers, removal fee and currency. Status is Matched, Not shipped, No invoice, STR not found, or a variance.
+
+**Rules:** Amazon-returned units are not expected at the warehouse. Removal fees come only from the removal fee data and are never shown as zero when blank. Product title comes from the Product Mapping Master.
+
+**One-time database step:** run `reconciliation_setup.sql` once in SQL Editor. It creates the invoice and ZIP import tables, their permissions and audit log, and deletes no data.
+
+**Note:** invoice PDFs must contain selectable text. Scanned PDFs will fail and are counted as failed.
+
 ## Existing database upgrade
 
 For an existing Control Tower installation, deploy the updated frontend files in this package. This frontend revision uses the existing database columns and does not require a new SQL migration. Do not rerun `supabase_schema.sql` or previously applied migrations.
