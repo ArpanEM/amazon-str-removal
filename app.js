@@ -65,10 +65,21 @@
     $$(".admin-only").forEach(el=>el.classList.toggle("hidden",!["admin","manager"].includes(p?.role)));applyPageAccess(p);
     $("#loginView").classList.add("hidden");$("#appView").classList.remove("hidden");await loadAll();installHorizontalScrollControls();
   }
+  async function fetchAllRows(table){
+    const orderCol={mail_settings:"updated_at",fc_mappings:"updated_at"}[table]||"created_at";
+    const out=[],size=1000;
+    for(let from=0;;from+=size){
+      const {data,error}=await sb.from(table).select("*").order(orderCol,{ascending:false}).order("id",{ascending:false}).range(from,from+size-1);
+      if(error)return {error};
+      out.push(...(data||[]));
+      if(!data||data.length<size)break;
+    }
+    return {data:out};
+  }
   async function loadAll(){
-    const tables=["removal_orders","shipment_lines","warehouse_receipts","amazon_removal_fees","amazon_claims","sap_postings","import_batches","str_records","product_mappings","po_receipts","amazon_invoices","invoice_zip_imports"];
-    const names=["orders","shipments","receipts","fees","claims","sap","imports","str","mappings","poReceipts","invoices","zipImports"];
-    for(let i=0;i<tables.length;i++){const {data,error}=await sb.from(tables[i]).select("*").order("created_at",{ascending:false}).limit(5000);if(!error)cache[names[i]]=data||[];}
+    const tables=["removal_orders","shipment_lines","warehouse_receipts","amazon_removal_fees","amazon_claims","sap_postings","import_batches","str_records","product_mappings","po_receipts","amazon_invoices","invoice_zip_imports","mail_settings","approval_batches","approval_items","fc_mappings","sap_stock","scat_exports","scat_export_lines","receipt_evidence"];
+    const names=["orders","shipments","receipts","fees","claims","sap","imports","str","mappings","poReceipts","invoices","zipImports","mailSettings","approvalBatches","approvalItems","fcMappings","sapStock","scatExports","scatLines","evidence"];
+    for(let i=0;i<tables.length;i++){const {data,error}=await fetchAllRows(tables[i]);if(!error)cache[names[i]]=data||[];}
     renderAll();
   }
   function fyDate(d){if(!d)return null;const x=new Date(d+"T00:00:00");return x;}
@@ -88,7 +99,7 @@
     mSel.value=monthsForFy.includes(mVal)?mVal:"all";
   }
   function renderAll(){
-    populateFilters();renderRecon();renderDashCharts();renderReceiptEntries();renderProducts();freezeAll();
+    populateFilters();renderRecon();renderDashCharts();renderReceiptEntries();renderProducts();renderApprovals();renderFcMap();renderScat();freezeAll();
     const orders=filtered(cache.orders,"request_date"),ships=filtered(cache.shipments,"shipment_date"),fees=filtered(cache.fees,"fee_date");
     const shipped=ships.reduce((a,x)=>a+num(x.shipped_qty),0),rt={good_qty:0,damaged_qty:0,near_expiry_qty:0,expired_qty:0,short_qty:0,not_received_qty:0};
     ships.forEach(s=>{const t=receiptTotals(s.id);Object.keys(rt).forEach(k=>rt[k]+=t[k]);});
@@ -120,14 +131,15 @@
   // Header sorting and per-column filters are available on each main tracker.
   const tableState={};
   function enhanceTable(tbodyId){
-    const body=$("#"+tbodyId),table=body?.closest("table");if(!table)return;const head=table.tHead?.rows[0];if(!head)return;
+    const el=document.getElementById(tbodyId),table=el?.tagName==="TABLE"?el:el?.closest("table"),body=table?.tBodies[0];if(!table||!body)return;const head=table.tHead?.rows[0];if(!head)return;
     let state=tableState[tbodyId]||(tableState[tbodyId]={filters:{},sortCol:-1,asc:true});
     let filterRow=table.querySelector("thead tr.column-filters");
     if(!filterRow){filterRow=document.createElement("tr");filterRow.className="column-filters";[...head.cells].forEach((th,i)=>{const cell=document.createElement("th"),input=document.createElement("input");input.className="column-filter";input.placeholder="Filter…";input.setAttribute("aria-label",`Filter ${th.textContent}`);input.value=state.filters[i]||"";input.onclick=e=>e.stopPropagation();input.oninput=()=>{state.filters[i]=input.value;applyTableFilters(tbodyId);};cell.append(input);filterRow.append(cell);th.title="Click to sort";th.style.cursor="pointer";th.onclick=()=>{if(state.sortCol===i)state.asc=!state.asc;else{state.sortCol=i;state.asc=true;}sortTableRows(tbodyId);};});table.tHead.append(filterRow);}
     if(state.sortCol>=0)sortTableRows(tbodyId);else applyTableFilters(tbodyId);
   }
-  function applyTableFilters(id){const body=$("#"+id),state=tableState[id];if(!body||!state)return;[...body.rows].forEach(row=>{const ok=Object.entries(state.filters).every(([i,v])=>!v||norm(row.cells[Number(i)]?.textContent).includes(norm(v)));row.hidden=!ok;});}
-  function sortTableRows(id){const body=$("#"+id),state=tableState[id];if(!body||!state||state.sortCol<0)return;const rows=[...body.rows];rows.sort((a,b)=>{const x=a.cells[state.sortCol]?.textContent.trim()||"",y=b.cells[state.sortCol]?.textContent.trim()||"",nx=Number(x.replace(/,/g,"")),ny=Number(y.replace(/,/g,""));const cmp=x!==""&&y!==""&&Number.isFinite(nx)&&Number.isFinite(ny)?nx-ny:x.localeCompare(y,undefined,{numeric:true,sensitivity:"base"});return state.asc?cmp:-cmp;});rows.forEach(r=>body.append(r));applyTableFilters(id);}
+  function bodyOf(id){const el=document.getElementById(id);return el?.tagName==="TABLE"?el.tBodies[0]:el;}
+  function applyTableFilters(id){const body=bodyOf(id),state=tableState[id];if(!body||!state)return;[...body.rows].forEach(row=>{const ok=Object.entries(state.filters).every(([i,v])=>!v||norm(row.cells[Number(i)]?.textContent).includes(norm(v)));row.hidden=!ok;});}
+  function sortTableRows(id){const body=bodyOf(id),state=tableState[id];if(!body||!state||state.sortCol<0)return;const rows=[...body.rows];rows.sort((a,b)=>{const x=a.cells[state.sortCol]?.textContent.trim()||"",y=b.cells[state.sortCol]?.textContent.trim()||"",nx=Number(x.replace(/,/g,"")),ny=Number(y.replace(/,/g,""));const cmp=x!==""&&y!==""&&Number.isFinite(nx)&&Number.isFinite(ny)?nx-ny:x.localeCompare(y,undefined,{numeric:true,sensitivity:"base"});return state.asc?cmp:-cmp;});rows.forEach(r=>body.append(r));applyTableFilters(id);}
   // Add always-visible left/right controls to wide report tables so users can reach columns outside the viewport.
   function installHorizontalScrollControls(){
     $$(".table-wrap").forEach(wrap=>{
@@ -163,7 +175,7 @@
     if(!value){box.innerHTML='<div class="notice">Select an Order ID or Tracking Number to load all associated material lines and shipped quantities.</div>';return;}
     if(!cache.shipments.some(s=>(type==="order"?s.order_id:s.tracking_number)===value)){box.innerHTML='<div class="notice">No match yet. Keep typing, then pick the Order ID or Tracking Number from the suggestions.</div>';return;}
     const lines=cache.shipments.filter(s=>(type==="order"?s.order_id:s.tracking_number)===value);
-    box.innerHTML=lines.map(raw=>{const s=enrichShipment(raw),t=receiptTotals(s.id),used=Object.values(t).reduce((a,b)=>a+num(b),0),remaining=Math.max(0,num(s.shipped_qty)-used),mm=masterFor(s.sku,s.fnsku,null);return `<div class="receipt-line" data-shipment="${esc(s.id)}"><div class="receipt-line-head"><b>${esc(mm.title||s.sku||'SKU unavailable')}</b><span>Material Code ${esc(mm.material_code||'Not mapped')} · SKU ${esc(s.sku||'—')} · Tracking: ${esc(s.tracking_number||'—')} · FNSKU: ${esc(s.fnsku||'—')}</span><strong>Amazon shipped: ${fmt(s.shipped_qty)} | Previously received: ${fmt(physOf(s.id))} | Short / Not received: ${fmt(snrOf(s.id))} | Remaining: ${fmt(remaining)}</strong><small>Amazon status: ${esc(s.amazon_status||'—')} (does not confirm physical receipt)</small></div><div class="receipt-qty-grid">${[['good_qty','Good'],['damaged_qty','Damaged'],['near_expiry_qty','Near Expiry'],['expired_qty','Expired'],['rework_qty','Rework'],['short_qty','Short'],['not_received_qty','Not Received']].map(([k,label])=>`<label>${label}<input type="number" min="0" step="1" value="0" data-qty="${k}" inputmode="numeric"></label>`).join('')}</div><label class="batch-field">Batch / Lot No<input data-batch placeholder="e.g. B2025-10 (optional)"></label></div>`;}).join('')||'<div class="notice">No shipment lines found.</div>';
+    box.innerHTML=lines.map(raw=>{const s=enrichShipment(raw),t=receiptTotals(s.id),used=Object.values(t).reduce((a,b)=>a+num(b),0),remaining=Math.max(0,num(s.shipped_qty)-used),mm=masterFor(s.sku,s.fnsku,null);return `<div class="receipt-line" data-shipment="${esc(s.id)}"><div class="receipt-line-head"><b>${esc(mm.title||s.sku||'SKU unavailable')}</b><span>Material Code ${esc(mm.material_code||'Not mapped')} · SKU ${esc(s.sku||'—')} · Tracking: ${esc(s.tracking_number||'—')} · FNSKU: ${esc(s.fnsku||'—')}</span><strong>Amazon shipped: ${fmt(s.shipped_qty)} | Previously received: ${fmt(physOf(s.id))} | Short / Not received: ${fmt(snrOf(s.id))} | Remaining: ${fmt(remaining)}</strong><small>Amazon status: ${esc(s.amazon_status||'—')} (does not confirm physical receipt)</small></div><div class="receipt-qty-grid">${[['good_qty','Good'],['damaged_qty','Damaged'],['near_expiry_qty','Near Expiry'],['expired_qty','Expired'],['rework_qty','Rework'],['short_qty','Short'],['not_received_qty','Not Received']].map(([k,label])=>`<label>${label}<input type="number" min="0" step="1" value="0" data-qty="${k}" inputmode="numeric"></label>`).join('')}</div><div class="batch-summary-row"><span data-batch-summary>No batches added</span> <button type="button" class="secondary" data-open-batches>Add batches</button></div><div class="hidden" data-evidence-row><label>Evidence: photo or video (required for damaged, short or not received)<input type="file" data-evidence accept="image/*,video/*" multiple></label></div></div>`;}).join('')||'<div class="notice">No shipment lines found.</div>';
   }
   function renderReceipts(){
     renderReceiptSelector();
@@ -208,7 +220,7 @@
   function nav(page){$$(".page").forEach(p=>p.classList.add("hidden"));$("#"+page+"Page").classList.remove("hidden");$$(".nav-item").forEach(n=>n.classList.toggle("active",n.dataset.page===page));$("#pageTitle").textContent=({dashboard:"Dashboard",orders:"Removal Orders",shipments:"Shipment Tracker",receipts:"Warehouse Receipts",fees:"Amazon Removal Fees",sap:"PO & SAP Tracker",claims:"Amazon Claims",reconciliation:"Reconciliation",reports:"Reports & Imports",employees:"Employee Management",audit:"Audit Logs"})[page]||"Dashboard";}
   async function addImport(file,type,read,accepted){const {error}=await sb.from("import_batches").insert({file_name:file.name,report_type:type,rows_read:read,rows_accepted:accepted,rejected_count:importProblemCount,error_details:importProblems,imported_by:session.user.id,imported_by_email:session.user.email});if(error)throw error;await audit("report_imported","import_batch",{file:file.name,type,rows_read:read,rows_accepted:accepted,rejected_count:importProblemCount});}
   const importProblems=[];let importProblemCount=0;
-  function masterFor(sku,fnsku,asin){const match=uniqueMap(cache.mappings,[{field:'fnsku',label:'FNSKU',value:fnsku},{field:'sku',label:'SKU',value:sku},{field:'asin',label:'ASIN',value:asin}].filter(k=>k.value));return {material_code:match.row?.material_code||'',title:match.row?.title||'',pack:num(match.row?.raw_data?.['Pack Of'])||0,conflict:match.conflict};}
+  function masterFor(sku,fnsku,asin){const match=uniqueMap(cache.mappings,[{field:'fnsku',label:'FNSKU',value:fnsku},{field:'sku',label:'SKU',value:sku},{field:'asin',label:'ASIN',value:asin}].filter(k=>k.value));return {material_code:match.row?.material_code||'',title:match.row?.title||'',pack:num(match.row?.raw_data?.['Pack Of'])||0,mrp:num(match.row?.new_mrp)||num(match.row?.raw_data?.['MRP'])||0,conflict:match.conflict};}
   const packOfRow=r=>num(r.raw_data?.['Pack Of'])||num(masterFor(r.sku,null,r.asin).pack)||1;
   const unitsOf=r=>(r.sent_units!=null?num(r.sent_units):num(r.quantity)*packOfRow(r));
   const canEdit=()=>["admin","manager"].includes(profile?.role);
@@ -269,14 +281,66 @@
     await addImport(file,label,rows.length,accepted);return {eligible:eligible.length,accepted,skipped,updated};
   }
   async function importFees(rows,file,cols={}){let accepted=0;for(const r of rows){const order=pick(r,cols.order||"order-id","order-id","removal-order-id","order id"),fee=pick(r,cols.fee||"fee-amount","fee-amount","amount","removal-fee"),currency=pick(r,cols.currency||"currency")||"INR",date=pick(r,cols.date||"posted-date","posted-date","fee-date")||null;if(!order||fee==="")continue;const {data:ord}=await sb.from("removal_orders").select("order_id").eq("order_id",order).limit(1);if(!ord?.length)continue;const {data:fr,error}=await sb.from("amazon_removal_fees").upsert({order_id:order,sku:"",fnsku:"",fee_amount:num(fee),currency,fee_date:date,source_file:file.name,raw_data:r},writeOpts({onConflict:"order_id,sku,fnsku"})).select("id");if(!error&&(fr?.length||canEdit()))accepted++;}await addImport(file,"amazon_removal_fees_only",rows.length,accepted);return accepted;}
-  async function handleAmazonImport(e){e.preventDefault();const fd=new FormData(e.target),file=fd.get("file"),type=fd.get("type");try{importProblems.length=0;importProblemCount=0;const rows=await readReportFile(file);let result={};if(type==="orders")result=await importOrders(rows,file);if(type==="shipments")result=await importShipments(rows,file);if(type==="str")result=await importSTR(rows,file);if(type==="str_master")result=await importSTR(rows,file,"str_master_sap");if(type==="fee")result={accepted:await importFees(rows,file)};if(type==="mapping")result=await importMappings(rows,file);const rejected=importProblemCount;const detail=importProblems.slice(0,8).join('\n');say("importMsg",`Processed ${rows.length} rows from ${file.name}. ${result?.eligible!=null?`FC_REMOVAL rows: ${result.eligible}. `:""}Accepted: ${result?.accepted??0}.${result?.skipped?` Already present and skipped: ${result.skipped}.`:""}${result?.updated?` Updated existing rows: ${result.updated}.`:""} Rejected / needs review: ${rejected}.${result?.feeAccepted!=null?` Removal fee lines captured: ${result.feeAccepted}.`:""}${detail?'\n'+detail:''}${rejected>8?'\nMore row errors are available in the browser console.':''}`,rejected===0);if(rejected>8)console.warn('Import row errors',importProblems);await loadAll();}catch(err){say("importMsg",err.message||String(err));}}
+  async function handleAmazonImport(e){e.preventDefault();const fd=new FormData(e.target),file=fd.get("file"),type=fd.get("type");try{importProblems.length=0;importProblemCount=0;const rows=await readReportFile(file);let result={};if(type==="orders")result=await importOrders(rows,file);if(type==="shipments")result=await importShipments(rows,file);if(type==="str")result=await importSTR(rows,file);if(type==="str_master")result=await importSTR(rows,file,"str_master_sap");if(type==="fee")result={accepted:await importFees(rows,file)};if(type==="mapping")result=await importMappings(rows,file);if(type==="stock")result=await importStock(rows,file);const rejected=importProblemCount;const detail=importProblems.slice(0,8).join('\n');say("importMsg",`Processed ${rows.length} rows from ${file.name}. ${result?.eligible!=null?`FC_REMOVAL rows: ${result.eligible}. `:""}Accepted: ${result?.accepted??0}.${result?.skipped?` Already present and skipped: ${result.skipped}.`:""}${result?.updated?` Updated existing rows: ${result.updated}.`:""} Rejected / needs review: ${rejected}.${result?.feeAccepted!=null?` Removal fee lines captured: ${result.feeAccepted}.`:""}${detail?'\n'+detail:''}${rejected>8?'\nMore row errors are available in the browser console.':''}`,rejected===0);if(rejected>8)console.warn('Import row errors',importProblems);await loadAll();}catch(err){say("importMsg",err.message||String(err));}}
   async function handleFeeUpload(e){e.preventDefault();const fd=new FormData(e.target),file=fd.get("file");try{const rows=await readReportFile(file);const accepted=await importFees(rows,file,{order:fd.get("order_col"),fee:fd.get("fee_col"),currency:fd.get("currency_col"),date:fd.get("date_col")});say("feeMsg",`Imported ${accepted} fee rows linked to known Amazon removal orders.`,true);await loadAll();}catch(err){say("feeMsg",err.message);}}
 
+  const BATCH_CONDS=[["good","Good"],["damaged","Damaged"],["rework","Rework"]];
+  let batchCtx=null;
+  function batchRowHtml(r){return `<tr><td><select data-bcond>${BATCH_CONDS.map(([k,l])=>`<option value="${k}" ${r.cond===k?"selected":""}>${l}</option>`).join("")}</select></td><td><input data-bbatch value="${esc(r.batch||"")}" placeholder="e.g. VU0001"></td><td><input data-bqty type="number" min="0" step="1" value="${num(r.qty)}"></td><td><input data-bmfg type="date" value="${esc(r.mfg||"")}"></td><td><input data-bexp type="date" value="${esc(r.exp||"")}"></td><td><button type="button" class="secondary" data-bdel>Remove</button></td></tr>`;}
+  function refreshBatchSummary(line){const rows=JSON.parse(line.dataset.batches||"[]");const el=line.querySelector("[data-batch-summary]");if(el)el.textContent=rows.length?`${rows.length} batch row(s): `+rows.map(r=>`${r.batch||"no batch"} ${r.cond} ${r.qty}`).join(", "):"No batches added";}
+  function openBatchModal(line){
+    if(!line)return;
+    const s=cache.shipments.find(x=>x.id===line.dataset.shipment);if(!s)return;
+    batchCtx={line,s};
+    let rows=[];try{rows=JSON.parse(line.dataset.batches||"[]");}catch(_){rows=[];}
+    if(!rows.length){BATCH_CONDS.forEach(([k])=>{const q=num(line.querySelector(`[data-qty="${k}_qty"]`)?.value);if(q>0)rows.push({cond:k,batch:"",qty:q,mfg:"",exp:""});});}
+    if(!rows.length)rows.push({cond:"good",batch:"",qty:0,mfg:"",exp:""});
+    $("#batchModalTitle").textContent=`${s.order_id} · ${s.tracking_number} · ${s.sku||""} · shipped ${s.shipped_qty}`;
+    $("#batchTable tbody").innerHTML=rows.map(batchRowHtml).join("");
+    say("batchMsg","");
+    $("#batchModal").classList.remove("hidden");
+  }
+  function saveBatchModal(){
+    if(!batchCtx)return;const {line}=batchCtx;
+    const rows=[...document.querySelectorAll("#batchTable tbody tr")].map(tr=>({cond:tr.querySelector("[data-bcond]").value,batch:tr.querySelector("[data-bbatch]").value.trim(),qty:num(tr.querySelector("[data-bqty]").value),mfg:tr.querySelector("[data-bmfg]").value,exp:tr.querySelector("[data-bexp]").value})).filter(r=>r.qty>0);
+    const sums={good:0,damaged:0,rework:0};rows.forEach(r=>sums[r.cond]+=r.qty);
+    BATCH_CONDS.forEach(([k])=>{const inp=line.querySelector(`[data-qty="${k}_qty"]`);if(inp)inp.value=sums[k];});
+    line.dataset.batches=JSON.stringify(rows);
+    refreshBatchSummary(line);
+    $("#batchModal").classList.add("hidden");batchCtx=null;
+  }
   async function handleReceipt(e){
     e.preventDefault();const lines=[...document.querySelectorAll("#receiptLineEditor .receipt-line")];if(!lines.length){say("receiptMsg","Select an Order ID or Tracking Number first.");return;}
     const receipt_date=e.target.elements.receipt_date.value,remarks=e.target.elements.remarks.value;let saved=0,errors=[];
-    for(const line of lines){const s=cache.shipments.find(x=>x.id===line.dataset.shipment);if(!s)continue;const vals={};line.querySelectorAll("[data-qty]").forEach(i=>vals[i.dataset.qty]=num(i.value));const total=Object.values(vals).reduce((a,b)=>a+b,0);if(!total)continue;const already=receiptTotals(s.id),prev=Object.values(already).reduce((a,b)=>a+num(b),0);if(total+prev>num(s.shipped_qty)){errors.push(`${s.order_id} / ${s.tracking_number}: allocation exceeds shipped quantity ${s.shipped_qty}`);continue;}const batch_no=line.querySelector("[data-batch]")?.value.trim()||null;const {error}=await sb.from("warehouse_receipts").insert({shipment_line_id:s.id,...vals,receipt_date,remarks,batch_no});if(error)errors.push(`${s.order_id} / ${s.tracking_number}: ${friendlyDbError(error)}`);else{saved++;await audit("receipt_saved","warehouse_receipt",{shipment_id:s.id,...vals});}}
-    if(saved){say("receiptMsg",`${saved} shipment line(s) saved.${errors.length?' Issues: '+errors.join(' | '):''}`,!errors.length);await loadAll();}else say("receiptMsg",errors.join(" | ")||"Enter at least one quantity against a shipment line.");
+    for(const line of lines){
+      const s=cache.shipments.find(x=>x.id===line.dataset.shipment);if(!s)continue;
+      const vals={};line.querySelectorAll("[data-qty]").forEach(i=>vals[i.dataset.qty]=num(i.value));
+      const total=Object.values(vals).reduce((acc,b)=>acc+b,0);if(!total)continue;
+      const needEv=num(vals.damaged_qty)+num(vals.short_qty)+num(vals.not_received_qty)>0,evFiles=line.querySelector("[data-evidence]")?.files||[];
+      if(needEv){if(!evFiles.length){errors.push(`${s.order_id} / ${s.tracking_number}: attach a photo or video for the damaged, short or not received quantity`);continue;}const ee=checkEvidenceFiles(evFiles);if(ee.length){errors.push(`${s.order_id} / ${s.tracking_number}: ${ee.join(", ")}`);continue;}}
+      let rows=[];try{rows=JSON.parse(line.dataset.batches||"[]");}catch(_){rows=[];}
+      let entries=[];
+      if(rows.length){
+        const sumBy={good:0,damaged:0,rework:0};rows.forEach(r=>sumBy[r.cond]+=num(r.qty));
+        if(BATCH_CONDS.some(([k])=>num(vals[`${k}_qty`])!==sumBy[k])){errors.push(`${s.order_id} / ${s.tracking_number}: batch quantities do not match the entered quantities. Open Add batches and save again.`);continue;}
+        rows.filter(r=>r.qty>0).forEach(r=>{
+          const c=r.cond==="good"?classifyGood(num(r.qty),receipt_date,r.exp||null):{good:0,near:0,expired:0};
+          entries.push({good_qty:c.good,near_expiry_qty:c.near,expired_qty:c.expired,damaged_qty:r.cond==="damaged"?num(r.qty):0,rework_qty:r.cond==="rework"?num(r.qty):0,short_qty:0,not_received_qty:0,batch_no:r.batch||null,mfg_date:r.mfg||null,exp_date:r.exp||null});
+        });
+        const other={short_qty:vals.short_qty||0,not_received_qty:vals.not_received_qty||0,near_expiry_qty:vals.near_expiry_qty||0,expired_qty:vals.expired_qty||0};
+        if(Object.values(other).some(v=>v>0))entries.push({...other,good_qty:0,damaged_qty:0,rework_qty:0,batch_no:null,mfg_date:null,exp_date:null});
+      }else{
+        entries.push({...vals,batch_no:null,mfg_date:null,exp_date:null});
+      }
+      const newTotal=entries.reduce((acc,en)=>acc+Object.values(en).filter(v=>typeof v==="number").reduce((x,y)=>x+y,0),0);
+      const prev=Object.values(receiptTotals(s.id)).reduce((acc,b)=>acc+num(b),0);
+      if(newTotal+prev>num(s.shipped_qty)){errors.push(`${s.order_id} / ${s.tracking_number}: allocation ${newTotal+prev} exceeds shipped quantity ${s.shipped_qty}`);continue;}
+      let lineOk=true;
+      for(const en of entries){const {error}=await sb.from("warehouse_receipts").insert({shipment_line_id:s.id,...en,receipt_date,remarks});if(error){lineOk=false;errors.push(`${s.order_id} / ${s.tracking_number}: ${friendlyDbError(error)}`);break;}saved++;}
+      if(lineOk){await audit("receipt_saved","warehouse_receipt",{shipment_id:s.id,rows:entries.length,total:newTotal});if(needEv){const up=await uploadEvidence(s.id,evFiles);if(up.errs.length)errors.push(`${s.order_id} / ${s.tracking_number}: receipt saved but evidence failed (${up.errs.join(", ")}). Add it from the Saved receipts list.`);}}
+    }
+    if(saved){say("receiptMsg",`${saved} receipt row(s) saved.${errors.length?' Issues: '+errors.join(' | '):''}`,!errors.length);await loadAll();}
+    else say("receiptMsg",errors.join(" | ")||"Enter at least one quantity against a shipment line.");
   }
   async function handleClaim(e){e.preventDefault();const fd=new FormData(e.target),x=Object.fromEntries(fd.entries());x.quantity=num(x.quantity);x.amount=x.amount===""?null:num(x.amount);const {error}=await sb.from("amazon_claims").insert(x);if(error)alert(friendlyDbError(error));else{e.target.reset();await loadAll();}}
   function exportTable(tableId,fileName){const table=$("#"+tableId);if(!table)return;const rows=[...table.querySelectorAll("tr")].filter(tr=>!tr.hidden&&!tr.classList.contains("column-filters")).map(tr=>[...tr.children].map(td=>(td.innerText||"").trim()));if(window.XLSX){const wb=XLSX.utils.book_new(),ws=XLSX.utils.aoa_to_sheet(rows);XLSX.utils.book_append_sheet(wb,ws,"Report");XLSX.writeFile(wb,fileName.replace(/\.csv$/i,".xlsx"));}else{const csv=rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(",")).join("\r\n");const blob=new Blob(["\uFEFF"+csv],{type:"text/csv;charset=utf-8;"}),url=URL.createObjectURL(blob),a=document.createElement("a");a.href=url;a.download=fileName;a.click();URL.revokeObjectURL(url);}}
@@ -284,7 +348,7 @@
     $("#loginBtn").onclick=async()=>{const {error}=await sb.auth.signInWithPassword({email:$("#loginEmail").value,password:$("#loginPassword").value});say("loginMsg",error?.message||"Signing in…",!error);};
     $("#logoutBtn").onclick=()=>sb.auth.signOut();
     $$("#nav [data-page]").forEach(b=>b.onclick=()=>nav(b.dataset.page));$$("[data-goto]").forEach(b=>b.onclick=()=>nav(b.dataset.goto));
-    $("#amazonImportForm").onsubmit=handleAmazonImport;$("#receiptForm").onsubmit=handleReceipt;$("#invoiceImportForm").onsubmit=async e=>{e.preventDefault();const files=e.target.elements.files.files;if(!files.length)return;try{await importInvoiceFiles(files);}catch(err){say("invoiceImportMsg",friendlyDbError(err));}};$("#reconStatus").onchange=renderRecon;document.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest("[data-track]");if(b)trackShipment(b.dataset.track,b.dataset.carrier);});$("#receiptEditForm").onsubmit=saveReceiptEdit;$("#warehouseImportForm").onsubmit=async e=>{e.preventDefault();const f=e.target.elements.file.files[0];if(!f)return;try{await importWarehouseExcel(f,e.target.elements.receipt_date.value);}catch(err){say("warehouseImportMsg",err.message||String(err));}};$("#warehouseImportForm").elements.receipt_date.value=today();$("#accessUser").onchange=refreshAccessChecks;$("#accessForm").onsubmit=saveAccess;$("#accessReset").onclick=resetAccess;$("#receiptEditCancel").onclick=()=>$("#receiptEditPanel").classList.add("hidden");$("#productForm").onsubmit=saveProduct;$("#productCancel").onclick=()=>$("#productFormPanel").classList.add("hidden");$("#productAddBtn").onclick=()=>openProductForm("");$("#productSearch").oninput=renderProducts;$("#productsTable").onclick=e=>{const ed=e.target.closest("[data-edit-product]");if(ed){openProductForm(ed.dataset.editProduct);return;}const dl=e.target.closest("[data-delete-product]");if(dl)deleteProduct(dl.dataset.deleteProduct);};$("#receiptEntriesTable").onclick=e=>{const b=e.target.closest("[data-edit-receipt]");if(b)openReceiptEdit(b.dataset.editReceipt);};document.addEventListener("click",e=>{if(e.target.closest&&e.target.closest(".nav-item"))setTimeout(freezeAll,80);});window.addEventListener("resize",()=>freezeAll());$("#reconSearch").oninput=renderRecon;$("#exportRecon").onclick=()=>exportTable("reconTable","reconciliation.xlsx");$("#poReceiptForm").onsubmit=handlePOReceipt;$("#poLookupValue").oninput=renderPOLineEditor;$("#poReceiptForm").elements.receipt_date.value=today();$("#claimForm").onsubmit=handleClaim;
+    $("#amazonImportForm").onsubmit=handleAmazonImport;$("#receiptForm").onsubmit=handleReceipt;$("#invoiceImportForm").onsubmit=async e=>{e.preventDefault();const files=e.target.elements.files.files;if(!files.length)return;try{await importInvoiceFiles(files);}catch(err){say("invoiceImportMsg",friendlyDbError(err));}};$("#reconStatus").onchange=renderRecon;document.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest("[data-track]");if(b)trackShipment(b.dataset.track,b.dataset.carrier);});$("#receiptEditForm").onsubmit=saveReceiptEdit;bindBatchModal();bindApprovals();bindScat();bindEvidence();$("#fcMapForm").onsubmit=saveFcMap;$("#fcMapTable").onclick=e=>{const d=e.target.closest&&e.target.closest("[data-fc-del]");if(d)deleteFcMap(d.dataset.fcDel);};$("#warehouseImportForm").onsubmit=async e=>{e.preventDefault();const f=e.target.elements.file.files[0];if(!f)return;try{await importWarehouseExcel(f,e.target.elements.receipt_date.value);}catch(err){say("warehouseImportMsg",err.message||String(err));}};$("#warehouseImportForm").elements.receipt_date.value=today();$("#accessUser").onchange=refreshAccessChecks;$("#accessForm").onsubmit=saveAccess;$("#accessReset").onclick=resetAccess;$("#receiptEditCancel").onclick=()=>$("#receiptEditPanel").classList.add("hidden");$("#productForm").onsubmit=saveProduct;$("#productCancel").onclick=()=>$("#productFormPanel").classList.add("hidden");$("#productAddBtn").onclick=()=>openProductForm("");$("#productSearch").oninput=renderProducts;$("#productsTable").onclick=e=>{const ed=e.target.closest("[data-edit-product]");if(ed){openProductForm(ed.dataset.editProduct);return;}const dl=e.target.closest("[data-delete-product]");if(dl)deleteProduct(dl.dataset.deleteProduct);};$("#receiptEntriesTable").onclick=e=>{const b=e.target.closest("[data-edit-receipt]");if(b)openReceiptEdit(b.dataset.editReceipt);};document.addEventListener("click",e=>{if(e.target.closest&&e.target.closest(".nav-item"))setTimeout(freezeAll,80);});window.addEventListener("resize",()=>freezeAll());$("#reconSearch").oninput=renderRecon;$("#exportRecon").onclick=()=>exportTable("reconTable","reconciliation.xlsx");$("#poReceiptForm").onsubmit=handlePOReceipt;$("#poLookupValue").oninput=renderPOLineEditor;$("#poReceiptForm").elements.receipt_date.value=today();$("#claimForm").onsubmit=handleClaim;
     $("#orderSearch").oninput=renderOrders;$("#shipmentSearch").oninput=renderShipments;$("#exportOrders").onclick=()=>exportTable("ordersTable","amazon_removal_orders.xlsx");$("#exportShipments").onclick=()=>exportTable("shipmentsTable","amazon_shipment_tracker.xlsx");$("#exportReceipts").onclick=()=>exportTable("receiptTable","warehouse_receipt_tracker.xlsx");$("#exportSAP").onclick=()=>exportTable("sapTable","sap_po_tracker.xlsx");$("#monthFilter").onchange=renderAll;$("#fyFilter").onchange=renderAll;
     
     $("#receiptForm").elements.receipt_date.value=today();$("#receiptLookupType").addEventListener("change",renderReceiptSelector);$("#receiptLookupValue").addEventListener("input",renderReceiptLineEditor);
@@ -418,7 +482,7 @@
     const tbl=$("#receiptEntriesTable");if(!tbl)return;
     const shipById=new Map((cache.shipments||[]).map(s=>[s.id,s]));
     const rows=[...(cache.receipts||[])].sort((x,y)=>String(y.created_at||"").localeCompare(String(x.created_at||"")));
-    tbl.querySelector("tbody").innerHTML=rows.map(r=>{const s=shipById.get(r.shipment_line_id)||{};const btn=canEditReceipt(r)?`<button class="secondary" data-edit-receipt="${esc(r.id)}">Edit</button>`:`<span class="muted">—</span>`;return `<tr><td>${esc(r.receipt_date||"—")}</td><td>${esc(s.order_id||"—")}</td><td>${esc(s.tracking_number||"—")}</td><td>${esc(s.sku||"—")}</td><td>${esc(r.batch_no||"—")}</td><td>${esc(r.exp_date||"—")}</td><td>${fmt(r.good_qty)}</td><td>${fmt(r.damaged_qty)}</td><td>${fmt(r.near_expiry_qty)}</td><td>${fmt(r.expired_qty)}</td><td>${fmt(r.short_qty)}</td><td>${fmt(r.not_received_qty)}</td><td>${fmt(r.rework_qty)}</td><td>${esc(r.remarks||"—")}</td><td>${r.created_by===session.user.id?"You":"Team"}</td><td>${btn}</td></tr>`;}).join("")||emptyRow(16);
+    tbl.querySelector("tbody").innerHTML=rows.map(r=>{const s=shipById.get(r.shipment_line_id)||{};const btn=canEditReceipt(r)?`<button class="secondary" data-edit-receipt="${esc(r.id)}">Edit</button>`:`<span class="muted">—</span>`;return `<tr><td>${esc(r.receipt_date||"—")}</td><td>${esc(s.order_id||"—")}</td><td>${esc(s.tracking_number||"—")}</td><td>${esc(s.sku||"—")}</td><td>${esc(r.batch_no||"—")}</td><td>${esc(r.exp_date||"—")}</td><td>${fmt(r.good_qty)}</td><td>${fmt(r.damaged_qty)}</td><td>${fmt(r.near_expiry_qty)}</td><td>${fmt(r.expired_qty)}</td><td>${fmt(r.short_qty)}</td><td>${fmt(r.not_received_qty)}</td><td>${fmt(r.rework_qty)}</td><td>${esc(r.remarks||"—")}</td><td>${(()=>{const need=evidenceNeeded(r),cnt=evidenceFor(r.shipment_line_id).length;return need||cnt?`<button class="secondary" data-evidence-open="${esc(r.shipment_line_id)}">${cnt?cnt+" file(s)":"Add"}</button>${need&&!cnt?' <span class="tag bad">Missing</span>':""}`:"—";})()}</td><td>${r.created_by===session.user.id?"You":"Team"}</td><td>${btn}</td></tr>`;}).join("")||emptyRow(17);
     enhanceTable("receiptEntriesTable");freezeAll();
   }
   function openReceiptEdit(id){
@@ -437,11 +501,12 @@
     const keys=["good_qty","damaged_qty","near_expiry_qty","expired_qty","short_qty","not_received_qty","rework_qty"];
     const vals={};keys.forEach(k=>vals[k]=num(f.elements[k].value));
     if(Object.values(vals).some(v=>v<0)){say("receiptEditMsg","Quantities cannot be negative.");return;}
+    if(vals.damaged_qty+vals.short_qty+vals.not_received_qty>0&&!evidenceFor(r.shipment_line_id).length){say("receiptEditMsg","Add photo or video evidence first (Evidence button in the list), then save.");return;}
     const ship=(cache.shipments||[]).find(s=>s.id===r.shipment_line_id);const shipped=num(ship?.shipped_qty);
     const others=(cache.receipts||[]).filter(x=>x.shipment_line_id===r.shipment_line_id&&x.id!==id).reduce((acc,x)=>acc+receiptAllocated(x),0);
     const total=Object.values(vals).reduce((acc,b)=>acc+b,0);
     if(others+total>shipped){say("receiptEditMsg",`Allocation exceeds shipped quantity. Shipped ${fmt(shipped)}, already allocated to other entries ${fmt(others)}.`);return;}
-    const {error}=await sb.from("warehouse_receipts").update({...vals,receipt_date:f.elements.receipt_date.value,remarks:f.elements.remarks.value||null,batch_no:f.elements.batch_no.value.trim()||null,mfg_date:f.elements.mfg_date.value||null,exp_date:f.elements.exp_date.value||null}).eq("id",id);
+    const {error}=await sb.from("warehouse_receipts").update({...vals,receipt_date:f.elements.receipt_date.value,remarks:f.elements.remarks.value||null,batch_no:f.elements.batch_no.value.trim()||null,mfg_date:f.elements.mfg_date.value||null,exp_date:f.elements.exp_date.value||null,manual_edit:true}).eq("id",id);
     if(error){say("receiptEditMsg",friendlyDbError(error));return;}
     await audit("receipt_edited","warehouse_receipt",{id,...vals});
     say("receiptEditMsg","Saved.",true);
@@ -508,8 +573,8 @@
   }
   function physOf(id){const t=receiptTotals(id);return t.good_qty+t.damaged_qty+t.near_expiry_qty+t.expired_qty+t.rework_qty;}
   function snrOf(id){const t=receiptTotals(id);return t.short_qty+t.not_received_qty;}
-  const ALL_PAGES=["dashboard","orders","shipments","receipts","fees","sap","reconciliation","claims","reports","employees","audit"];
-  const PAGE_LABELS={dashboard:"Dashboard",orders:"Removal Orders",shipments:"Shipment Tracker",receipts:"Warehouse Receipts",fees:"Removal Fees",sap:"PO & SAP Tracker",reconciliation:"Reconciliation",claims:"Amazon Claims",reports:"Reports & Imports",employees:"Employees",audit:"Audit Logs"};
+  const ALL_PAGES=["dashboard","orders","shipments","receipts","fees","sap","reconciliation","claims","approvals","scat","reports","employees","audit"];
+  const PAGE_LABELS={dashboard:"Dashboard",orders:"Removal Orders",shipments:"Shipment Tracker",receipts:"Warehouse Receipts",fees:"Removal Fees",sap:"PO & SAP Tracker",reconciliation:"Reconciliation",claims:"Amazon Claims",approvals:"Approvals",scat:"SAP SCAT",reports:"Reports & Imports",employees:"Employees",audit:"Audit Logs"};
   const ROLE_PAGES={warehouse:["receipts"]};
   let allProfiles=[];
   function pagesFor(p){if(!p||p.role==="admin")return ALL_PAGES;if(Array.isArray(p.allowed_pages)&&p.allowed_pages.length)return p.allowed_pages;return ROLE_PAGES[p.role]||ALL_PAGES;}
@@ -565,6 +630,14 @@
     const d=/^(\d{1,2})[\/.-](\d{1,2})[\/.-](\d{4})$/.exec(s);if(d)return `${d[3]}-${d[2].padStart(2,"0")}-${d[1].padStart(2,"0")}`;
     return null;
   }
+  function skuMatch(s,sk){const mat=norm(masterFor(s.sku,s.fnsku,null).material_code),ss=norm(s.sku);return mat===sk||ss===sk||(!!ss&&sk.includes(ss))||(!!sk&&ss.includes(sk));}
+  function classifyGood(goodQty,rd,exp){
+    if(!exp)return{good:goodQty,near:0,expired:0};
+    const days=Math.floor((new Date(exp)-new Date(rd))/86400000);
+    if(days<0)return{good:0,near:0,expired:goodQty};
+    if(days<=90)return{good:0,near:goodQty,expired:0};
+    return{good:goodQty,near:0,expired:0};
+  }
   async function importWarehouseExcel(file,fallbackDate){
     say("warehouseImportMsg","Reading file...",true);
     const X=await ensureXLSX();
@@ -572,41 +645,472 @@
     const phyWs=wb.Sheets["PHY DATA"];
     if(!phyWs){say("warehouseImportMsg","Sheet 'PHY DATA' not found in this file.");return;}
     const phy=sheetRecords(phyWs,X);
-    const inv=wb.Sheets["INV DATA"]?sheetRecords(wb.Sheets["INV DATA"],X):[];
-    const dayMs=86400000,T={read:0,accepted:0,duplicates:0,rejected:0},problems=[],seen=new Set();
     const trk=o=>String(pickCell(o,"tracking no")??"").replace(/\.0$/,"").trim();
-    for(let i=0;i<phy.length;i++){
-      const o=phy[i];T.read++;
+    const T={read:0,inserted:0,updated:0,unchanged:0,keptManual:0,rejected:0};
+    const problems=[],rows=[];
+    phy.forEach((o,i)=>{
+      T.read++;
       const tracking=trk(o),sku=String(pickCell(o,"sku code")??"").replace(/\.0$/,"").trim();
-      const batch=String(pickCell(o,"batch")??"").trim()||null,box=String(pickCell(o,"box no")??"").trim()||null;
+      const batch=String(pickCell(o,"batch")??"").trim(),box=String(pickCell(o,"box no")??"").trim();
       const good=num(pickCell(o,"good")),rework=num(pickCell(o,"rework")),damage=num(pickCell(o,"damage")),ph=num(pickCell(o,"ph qty"));
-      const mfg=dateISOFromCell(pickCell(o,"mfg")),exp=dateISOFromCell(pickCell(o,"exp"));
-      const rd=dateISOFromCell(pickCell(o,"receipt date","received date"))||fallbackDate;
-      if(!tracking||!sku||!ph){T.rejected++;problems.push(`Row ${i+2}: tracking, SKU or Ph Qty missing`);continue;}
-      if(good+rework+damage!==ph){T.rejected++;problems.push(`${tracking} / ${sku}: Ph Qty ${ph} is not Good + Rework + Damage`);continue;}
-      const ship=(cache.shipments||[]).filter(s=>norm(s.tracking_number)===norm(tracking)).find(s=>{const mat=norm(masterFor(s.sku,s.fnsku,null).material_code),ss=norm(s.sku),sk=norm(sku);return mat===sk||ss===sk||(ss&&sk.includes(ss))||(sk&&ss.includes(sk));});
-      if(!ship){T.rejected++;problems.push(`${tracking} / ${sku}: no shipment line matches this tracking and SKU`);continue;}
-      let goodOk=good,near=0,expired=0;
-      if(exp){const days=Math.floor((new Date(exp)-new Date(rd))/dayMs);if(days<0){expired=good;goodOk=0;}else if(days<=90){near=good;goodOk=0;}}
-      const total=goodOk+near+expired+damage+rework;
-      const prev=Object.values(receiptTotals(ship.id)).reduce((acc,b)=>acc+num(b),0);
-      if(prev+total>num(ship.shipped_qty)){T.rejected++;problems.push(`${tracking} / ${sku}: allocation ${prev+total} exceeds shipped ${ship.shipped_qty}`);continue;}
-      const key=[norm(tracking),norm(sku),norm(batch),norm(box),good,rework,damage,rd].join("|");
-      if(seen.has(key)||(cache.receipts||[]).some(r=>r.import_key===key)){T.duplicates++;continue;}
-      seen.add(key);
-      const {data,error}=await sb.from("warehouse_receipts").upsert({shipment_line_id:ship.id,good_qty:goodOk,damaged_qty:damage,near_expiry_qty:near,expired_qty:expired,rework_qty:rework,short_qty:0,not_received_qty:0,receipt_date:rd,remarks:`Imported: ${file.name}`,batch_no:batch,mfg_date:mfg,exp_date:exp,source_file:file.name,import_key:key},{onConflict:"import_key",ignoreDuplicates:true}).select("id");
-      if(error){T.rejected++;problems.push(`${tracking} / ${sku}: ${friendlyDbError(error)}`);continue;}
-      if(!data?.length){T.duplicates++;continue;}
-      T.accepted++;
+      if(!tracking||!sku||!ph){T.rejected++;problems.push(`Row ${i+2}: tracking, SKU or Ph Qty missing`);return;}
+      if(good+rework+damage!==ph){T.rejected++;problems.push(`${tracking} / ${sku}: Ph Qty ${ph} is not Good + Rework + Damage`);return;}
+      rows.push({i,tracking,sku,batch,box,good,rework,damage,ph,mfg:dateISOFromCell(pickCell(o,"mfg")),exp:dateISOFromCell(pickCell(o,"exp")),rd:dateISOFromCell(pickCell(o,"receipt date","received date"))||fallbackDate});
+    });
+    const groups=new Map();
+    rows.forEach(r=>{const k=norm(r.tracking)+"|"+norm(r.sku);if(!groups.has(k))groups.set(k,[]);groups.get(k).push(r);});
+    const ops=[];
+    for(const [gk,list] of groups){
+      const [tr,sk]=gk.split("|");
+      const lines=(cache.shipments||[]).filter(s=>norm(s.tracking_number)===tr&&skuMatch(s,sk)).sort((x,y)=>num(x.line_seq)-num(y.line_seq)||String(x.id).localeCompare(String(y.id)));
+      if(!lines.length){list.forEach(r=>{T.rejected++;problems.push(`${r.tracking} / ${r.sku}: no shipment line matches this tracking and SKU`);});continue;}
+      const lineIds=new Set(lines.map(l=>l.id));
+      const recs=(cache.receipts||[]).filter(x=>lineIds.has(x.shipment_line_id));
+      const replaceable=recs.filter(x=>x.source_file===file.name&&!x.manual_edit);
+      const fixed=recs.filter(x=>!(x.source_file===file.name&&!x.manual_edit));
+      T.keptManual+=fixed.filter(x=>x.source_file===file.name&&x.manual_edit).length;
+      const cap=new Map(lines.map(l=>[l.id,num(l.shipped_qty)]));
+      fixed.forEach(x=>cap.set(x.shipment_line_id,cap.get(x.shipment_line_id)-receiptAllocated(x)));
+      const need=list.reduce((acc,r)=>acc+r.ph,0);
+      const free=[...cap.values()].reduce((acc,b)=>acc+Math.max(0,b),0);
+      if(need>free){list.forEach(r=>{T.rejected++;problems.push(`${r.tracking} / ${r.sku}: file needs ${need}, only ${free} free on this shipment (manual or other entries use the rest)`);});continue;}
+      const capLeft=new Map(lines.map(l=>[l.id,Math.max(0,cap.get(l.id))]));
+      let li=0;const segs=[];
+      for(const r of list){
+        const parts=new Map();
+        for(const [kind,qty] of [["good",r.good],["rework",r.rework],["damage",r.damage]]){
+          let left=qty;
+          while(left>0){
+            while(li<lines.length&&capLeft.get(lines[li].id)<=0)li++;
+            const lid=lines[li].id,take=Math.min(left,capLeft.get(lid));
+            capLeft.set(lid,capLeft.get(lid)-take);left-=take;
+            const p=parts.get(lid)||{good:0,rework:0,damage:0};p[kind]+=take;parts.set(lid,p);
+          }
+        }
+        let seq=0;
+        for(const [lid,p] of parts){
+          seq++;
+          const c=classifyGood(p.good,r.rd,r.exp);
+          segs.push({key:[norm(r.tracking),norm(r.sku),norm(r.batch),norm(r.box),r.i,seq].join("|"),lineId:lid,
+            payload:{good_qty:c.good,damaged_qty:p.damage,near_expiry_qty:c.near,expired_qty:c.expired,rework_qty:p.rework,short_qty:0,not_received_qty:0,receipt_date:r.rd,remarks:`Imported: ${file.name}`,batch_no:r.batch||null,mfg_date:r.mfg,exp_date:r.exp,source_file:file.name,import_key:null,shipment_line_id:lid}});
+        }
+      }
+      const used=new Set();
+      for(const s of segs){
+        s.payload.import_key=s.key;
+        const row=replaceable.find(x=>!used.has(x.id)&&x.import_key===s.key)||replaceable.find(x=>!used.has(x.id)&&x.shipment_line_id===s.lineId&&norm(x.batch_no)===norm(s.payload.batch_no));
+        if(row){
+          used.add(row.id);
+          const p=s.payload;
+          const same=["good_qty","damaged_qty","near_expiry_qty","expired_qty","rework_qty"].every(k=>num(row[k])===num(p[k]))&&String(row.receipt_date||"")===String(p.receipt_date||"")&&String(row.exp_date||"")===String(p.exp_date||"")&&String(row.mfg_date||"")===String(p.mfg_date||"")&&String(row.batch_no||"")===String(p.batch_no||"");
+          if(same){T.unchanged++;continue;}
+          const {shipment_line_id,...upd}=p;
+          ops.push({type:"update",id:row.id,payload:upd,delta:receiptAllocated(p)-receiptAllocated(row)});
+        }else{
+          ops.push({type:"insert",payload:s.payload,delta:receiptAllocated(s.payload)});
+        }
+      }
+      replaceable.forEach(x=>{if(!used.has(x.id)&&receiptAllocated(x)>0)ops.push({type:"update",id:x.id,payload:{good_qty:0,damaged_qty:0,near_expiry_qty:0,expired_qty:0,rework_qty:0,import_key:null},delta:-receiptAllocated(x)});});
     }
-    const invQty=new Map();inv.forEach(o=>{const t=trk(o);if(t)invQty.set(t,(invQty.get(t)||0)+num(pickCell(o,"inv data")));});
-    const phyQty=new Map();phy.forEach(o=>{const t=trk(o);if(t)phyQty.set(t,(phyQty.get(t)||0)+num(pickCell(o,"ph qty")));});
-    invQty.forEach((q,t)=>{if(phyQty.has(t)&&phyQty.get(t)!==q)problems.push(`Check ${t}: INV DATA ${q} vs PHY DATA ${phyQty.get(t)}`);});
+    ops.sort((x,y)=>(x.type==="insert")-(y.type==="insert")||x.delta-y.delta);
+    for(const op of ops){
+      if(op.type==="update"){
+        const {error}=await sb.from("warehouse_receipts").update(op.payload).eq("id",op.id);
+        if(error){T.rejected++;problems.push(friendlyDbError(error));}else T.updated++;
+      }else{
+        const {error}=await sb.from("warehouse_receipts").insert(op.payload);
+        if(error){T.rejected++;problems.push(friendlyDbError(error));}else T.inserted++;
+      }
+    }
     await loadAll();
-    say("warehouseImportMsg",`Done. Read ${T.read}, accepted ${T.accepted}, already imported ${T.duplicates}, rejected ${T.rejected}.`,T.rejected===0);
+    say("warehouseImportMsg",`Done. Read ${T.read}, inserted ${T.inserted}, updated ${T.updated}, unchanged ${T.unchanged}, kept manual edits ${T.keptManual}, rejected ${T.rejected}.`,T.rejected===0);
     const box=$("#warehouseImportTotals");if(box)box.innerHTML=problems.length?`<p class="muted">${problems.map(esc).join("<br>")}</p>`:"";
   }
-  const COURIER_TRACK_PAGES={BLUEDART:{base:"https://www.bluedart.com/how-to-track",direct:false},DLV:{base:"https://www.delhivery.com/track-v2/package/",direct:true}};
+  function bindBatchModal(){
+    $("#batchAddRow").onclick=()=>$("#batchTable tbody").insertAdjacentHTML("beforeend",batchRowHtml({cond:"good",batch:"",qty:0,mfg:"",exp:""}));
+    $("#batchTable").onclick=e=>{const d=e.target.closest&&e.target.closest("[data-bdel]");if(d)d.closest("tr").remove();};
+    $("#batchSave").onclick=saveBatchModal;
+    $("#batchCancel").onclick=()=>{$("#batchModal").classList.add("hidden");batchCtx=null;};
+    $("#receiptLineEditor").addEventListener("change",e=>{const inp=e.target.closest&&e.target.closest("[data-qty]");if(!inp||!["good_qty","damaged_qty","rework_qty"].includes(inp.dataset.qty))return;const line=inp.closest(".receipt-line");if(line&&num(inp.value)>0&&!JSON.parse(line.dataset.batches||"[]").length)openBatchModal(line);});
+    document.addEventListener("click",e=>{const b=e.target.closest&&e.target.closest("[data-open-batches]");if(b)openBatchModal(b.closest(".receipt-line"));});
+  }
+  // ---------- Approvals: damaged / expired / near expiry, mailed for approval ----------
+  let apprList=[];
+  function apprSettings(){return (cache.mailSettings||[])[0]||{};}
+  function apprCandidates(){
+    const from=$("#apprFrom")?.value||"",to=$("#apprTo")?.value||"",cs=$("#apprCase")?.value||"all";
+    const shipById=new Map((cache.shipments||[]).map(s=>[s.id,s]));
+    const locked=new Set((cache.approvalItems||[]).filter(i=>{const b=(cache.approvalBatches||[]).find(x=>x.id===i.batch_id);return b&&b.status!=="Rejected";}).map(i=>i.receipt_id+"|"+i.case_type));
+    const out=[];
+    (cache.receipts||[]).forEach(r=>{
+      const d=String(r.receipt_date||"").slice(0,10);
+      if(from&&d<from)return;if(to&&d>to)return;
+      const s=shipById.get(r.shipment_line_id)||{};
+      const m=masterFor(s.sku,s.fnsku,null);
+      [["Damaged",num(r.damaged_qty)],["Expired",num(r.expired_qty)],["Near Expiry",num(r.near_expiry_qty)]].forEach(([c,q])=>{
+        if(q<=0||(cs!=="all"&&cs!==c)||locked.has(r.id+"|"+c))return;
+        out.push({receipt_id:r.id,case_type:c,order_id:s.order_id||"",tracking_number:s.tracking_number||"",sku:s.sku||"",product:m.title||"",batch_no:r.batch_no||"",exp_date:r.exp_date||"",received:d,qty:q,mrp:m.mrp||0,value:q*(m.mrp||0)});
+      });
+    });
+    return out;
+  }
+  function apprHtml(rows,total){
+    const cell='style="border:1px solid #cbd5e1;padding:6px;font-size:12px"';
+    const head=["#","Case","Order ID","SKU","Product","Batch","Exp date","Qty","MRP","Value (INR)"].map(h=>`<th ${cell} style="border:1px solid #cbd5e1;padding:6px;background:#f1f5f9;text-align:left;font-size:12px">${h}</th>`).join("");
+    const body=rows.map((r,i)=>`<tr><td ${cell}>${i+1}</td><td ${cell}>${esc(r.case_type)}</td><td ${cell}>${esc(r.order_id)}</td><td ${cell}>${esc(r.sku)}</td><td ${cell}>${esc(r.product)}</td><td ${cell}>${esc(r.batch_no||"-")}</td><td ${cell}>${esc(r.exp_date||"-")}</td><td ${cell} align="right">${fmt(r.qty)}</td><td ${cell} align="right">${fmt(r.mrp)}</td><td ${cell} align="right">${fmt(r.value)}</td></tr>`).join("");
+    const qty=rows.reduce((acc,r)=>acc+r.qty,0);
+    return `<div style="font-family:Arial,sans-serif;color:#0f172a"><p>Dear team,</p><p>Please review the stock below (damaged, expired and near expiry) and reply to this mail with <b>APPROVED</b> or <b>REJECTED</b>, your name and the date.</p><table style="border-collapse:collapse;width:100%"><thead><tr>${head}</tr></thead><tbody>${body}</tbody><tfoot><tr><td colspan="7" style="padding:6px;font-weight:bold">Total</td><td align="right" style="padding:6px;font-weight:bold">${fmt(qty)}</td><td></td><td align="right" style="padding:6px;font-weight:bold">${fmt(total)}</td></tr></tfoot></table><p style="font-size:12px;color:#64748b">Value = quantity x MRP per unit.</p></div>`;
+  }
+  function renderApprovals(){
+    const page=$("#approvalsPage");if(!page)return;
+    const manager=canEdit();
+    $("#apprLocked")?.classList.toggle("hidden",manager);
+    $("#apprBody")?.classList.toggle("hidden",!manager);
+    if(!manager)return;
+    const st=apprSettings(),f=$("#apprSettingsForm");
+    if(f&&!f.dataset.filled&&st.id){f.elements.sender_name.value=st.sender_name||"";f.elements.sender_email.value=st.sender_email||"";f.elements.to_list.value=st.to_list||"";f.elements.cc_list.value=st.cc_list||"";f.elements.endpoint_url.value=st.endpoint_url||"";f.elements.token.value=st.token||"";f.dataset.filled="1";}
+    const batches=[...(cache.approvalBatches||[])].sort((x,y)=>String(y.sent_at).localeCompare(String(x.sent_at)));
+    const last=batches[0];
+    const days=last?Math.floor((Date.now()-new Date(last.sent_at))/86400000):null;
+    const pending=batches.filter(b=>b.status==="Sent").length;
+    $("#apprDue").textContent=days===null?"No approval mail sent yet.":days>=14?`Fortnightly approval is due. Last mail was ${days} days ago.`:`Next fortnightly mail due in ${14-days} day(s).`;
+    $("#apprPending").textContent=pending?`${pending} mail(s) waiting for approval.`:"No mail waiting for approval.";
+    if(!$("#apprFrom").value&&last)$("#apprFrom").value=String(last.sent_at).slice(0,10);
+    apprList=apprCandidates();
+    const total=apprList.reduce((acc,r)=>acc+r.value,0);
+    const per=c=>apprList.filter(r=>r.case_type===c);
+    $("#apprSummary").innerHTML=`<div class="kpi-grid compact">${APPR_CASES.map(c=>`<article class="kpi"><span>${c}</span><b>${fmt(per(c).reduce((x,r)=>x+r.qty,0))} units</b><small>Value ${fmt(per(c).reduce((x,r)=>x+r.value,0))}</small></article>`).join("")}<article class="kpi"><span>Total value</span><b>${fmt(total)}</b><small>${fmt(apprList.length)} line(s) not yet mailed</small></article></div>`;
+    $("#apprItems tbody").innerHTML=apprList.map((r,i)=>`<tr data-idx="${i}"><td><input type="checkbox" checked></td><td>${esc(r.case_type)}</td><td>${esc(r.order_id||"—")}</td><td>${esc(r.tracking_number||"—")}</td><td>${esc(r.sku||"—")}</td><td>${esc(r.product||"—")}</td><td>${esc(r.batch_no||"—")}</td><td>${esc(r.exp_date||"—")}</td><td>${esc(r.received||"—")}</td><td>${fmt(r.qty)}</td><td>${fmt(r.mrp)}</td><td>${fmt(r.value)}</td></tr>`).join("")||emptyRow(12);
+    enhanceTable("apprItems");freezeAll();
+    $("#apprHistory tbody").innerHTML=batches.map(b=>`<tr><td>${esc(String(b.sent_at||"").slice(0,10))}</td><td>${esc(b.subject||"")}</td><td>${esc(b.to_list||"")}</td><td>${fmt(b.item_count)}</td><td>${fmt(b.total_value)}</td><td><span class="tag ${b.status==="Approved"?"ok":b.status==="Rejected"?"bad":"warn"}">${esc(b.status)}</span>${b.followup_count?`<br><small>Follow-up sent ${fmt(b.followup_count)} time(s), last ${esc(String(b.followup_sent_at||"").slice(0,10))}</small>`:""}</td><td>${esc(b.approved_by_name||"—")} ${esc(b.approval_date||"")}</td><td>${b.screenshot_path?`<button class="secondary" data-shot="${esc(b.id)}">View screenshot</button>`:"—"}</td><td>${b.status==="Sent"?`<button class="secondary" data-decide="${esc(b.id)}">Record decision</button>`:"—"}</td></tr>`).join("")||emptyRow(9);
+    enhanceTable("apprHistory");
+  }
+  async function sendApprovalMail(){
+    const f=$("#apprSettingsForm");
+    const senderName=f.elements.sender_name.value.trim(),replyTo=f.elements.sender_email.value.trim(),to=f.elements.to_list.value.trim(),cc=f.elements.cc_list.value.trim(),endpoint=f.elements.endpoint_url.value.trim(),token=f.elements.token.value.trim();
+    if(!to){say("apprMsg","Enter at least one To address.");return;}
+    if(!endpoint||!token){say("apprMsg","Enter the mailer URL and token.");return;}
+    const rows=[...document.querySelectorAll("#apprItems tbody tr[data-idx]")].filter(tr=>tr.querySelector("input[type=checkbox]")?.checked).map(tr=>apprList[Number(tr.dataset.idx)]).filter(Boolean);
+    if(!rows.length){say("apprMsg","Select at least one line.");return;}
+    const total=rows.reduce((acc,r)=>acc+r.value,0),qty=rows.reduce((acc,r)=>acc+r.qty,0);
+    const subject=`Approval required: damaged / expired / near expiry stock, ${rows.length} line(s), value ${fmt(total)} (${today()})`;
+    say("apprMsg","Sending mail...",true);
+    let res,body={};
+    try{res=await fetch(endpoint,{method:"POST",headers:{"Content-Type":"text/plain;charset=utf-8"},body:JSON.stringify({token,senderName,replyTo,to,cc,subject,html:apprHtml(rows,total)})});body=await res.json();}
+    catch(err){say("apprMsg","Mail was not sent: "+(err.message||"could not reach the mailer. Check the URL and that it is deployed for Anyone."));return;}
+    if(!body.ok){say("apprMsg","Mail was not sent: "+(body.error||`HTTP ${res?.status}`));return;}
+    const {data:bd,error:be}=await sb.from("approval_batches").insert({subject,to_list:to,cc_list:cc||null,sender_name:senderName||null,reply_to:replyTo||null,item_count:rows.length,total_qty:qty,total_value:total,status:"Sent"}).select("id");
+    if(be){say("apprMsg","Mail sent, but the record was not saved: "+friendlyDbError(be));return;}
+    const batchId=bd[0].id;
+    const {error:ie}=await sb.from("approval_items").insert(rows.map(r=>({batch_id:batchId,receipt_id:r.receipt_id,case_type:r.case_type,order_id:r.order_id||null,tracking_number:r.tracking_number||null,sku:r.sku||null,batch_no:r.batch_no||null,exp_date:r.exp_date||null,qty:r.qty,mrp:r.mrp,value:r.value})));
+    if(ie)say("apprMsg","Mail sent and batch saved, but some lines failed: "+friendlyDbError(ie));
+    await sb.from("mail_settings").upsert({id:"default",sender_name:senderName||null,sender_email:replyTo||null,to_list:to,cc_list:cc||null,endpoint_url:endpoint,token,updated_at:new Date().toISOString()});
+    await audit("approval_mail_sent","approval_batch",{id:batchId,items:rows.length,value:total});
+    if(!ie)say("apprMsg","Mail sent and recorded.",true);
+    await loadAll();
+  }
+  function apprOpenDecision(id){const p=$("#apprDecisionPanel");if(!p)return;const f=$("#apprDecisionForm");f.reset();f.elements.batch_id.value=id;f.elements.approval_date.value=today();p.classList.remove("hidden");say("apprDecisionMsg","");p.scrollIntoView({behavior:"smooth",block:"center"});}
+  async function saveApprovalDecision(e){
+    e.preventDefault();
+    const f=e.target,id=f.elements.batch_id.value,dec=f.elements.decision.value,file=f.elements.screenshot.files[0];
+    const cur=(cache.approvalBatches||[]).find(b=>b.id===id);
+    if(!cur){say("apprDecisionMsg","Mail record not found. Reload and try again.");return;}
+    let path=cur.screenshot_path||null;
+    if(dec==="Approved"&&!file&&!path){say("apprDecisionMsg","An approval needs the screenshot of the approval mail.");return;}
+    if(file){const p=`${id}/${Date.now()}_${file.name.replace(/[^\w.\-]/g,"_")}`;const {error:ue}=await sb.storage.from("approval-evidence").upload(p,file);if(ue){say("apprDecisionMsg",friendlyDbError(ue));return;}path=p;}
+    const {error}=await sb.from("approval_batches").update({status:dec,approved_by_name:f.elements.approver_name.value.trim()||null,approval_date:f.elements.approval_date.value||null,decision_remarks:f.elements.remarks.value.trim()||null,screenshot_path:path}).eq("id",id);
+    if(error){say("apprDecisionMsg",friendlyDbError(error));return;}
+    await audit("approval_decision","approval_batch",{id,decision:dec});
+    say("apprDecisionMsg","Decision saved.",true);
+    $("#apprDecisionPanel").classList.add("hidden");
+    await loadAll();
+  }
+  async function viewApprovalShot(id){
+    const b=(cache.approvalBatches||[]).find(x=>x.id===id);if(!b?.screenshot_path)return;
+    const {data,error}=await sb.storage.from("approval-evidence").createSignedUrl(b.screenshot_path,600);
+    if(error){alert(friendlyDbError(error));return;}
+    window.open(data.signedUrl,"_blank","noopener");
+  }
+  const APPR_CASES=["Damaged","Expired","Near Expiry"];
+  function bindApprovals(){
+    $("#apprSettingsForm").onsubmit=e=>{e.preventDefault();sendApprovalMail();};
+    $("#apprSettingsForm").onchange=()=>{};
+    $("#apprFrom").onchange=renderApprovals;$("#apprTo").onchange=renderApprovals;$("#apprCase").onchange=renderApprovals;
+    $("#apprDecisionForm").onsubmit=saveApprovalDecision;
+    $("#apprDecisionCancel").onclick=()=>$("#apprDecisionPanel").classList.add("hidden");
+    $("#apprHistory").onclick=e=>{const d=e.target.closest&&e.target.closest("[data-decide]");if(d)apprOpenDecision(d.dataset.decide);const s=e.target.closest&&e.target.closest("[data-shot]");if(s)viewApprovalShot(s.dataset.shot);};
+    
+  }
+  // ---------- FC mapping: Amazon FC to SAP virtual plant and storage location ----------
+  const SAP_SHIP_TO={plant:"DP50",storage:"ED01"};
+  function renderFcMap(){
+    const tbl=$("#fcMapTable");if(!tbl)return;
+    const manager=canEdit();
+    $("#fcMapForm")?.classList.toggle("hidden",!manager);
+    const rows=[...(cache.fcMappings||[])].sort((x,y)=>String(x.amazon_fc).localeCompare(String(y.amazon_fc)));
+    tbl.querySelector("tbody").innerHTML=rows.map(r=>`<tr><td>${esc(r.amazon_fc)}</td><td>${esc(r.sap_virtual_plant||"—")}</td><td>${esc(r.sap_storage_location||"—")}</td><td>${esc(SAP_SHIP_TO.plant)}</td><td>${esc(SAP_SHIP_TO.storage)}</td><td>${esc(r.notes||"—")}</td><td>${manager?`<button class="secondary" data-fc-del="${esc(r.id)}">Remove</button>`:"—"}</td></tr>`).join("")||emptyRow(7);
+    enhanceTable("fcMapTable");freezeAll();
+  }
+  async function saveFcMap(e){
+    e.preventDefault();
+    if(!canEdit()){say("fcMapMsg","Only a manager or admin can change the FC mapping.");return;}
+    const f=e.target;const row={amazon_fc:f.elements.amazon_fc.value.trim().toUpperCase(),sap_virtual_plant:f.elements.sap_virtual_plant.value.trim()||null,sap_storage_location:f.elements.sap_storage_location.value.trim()||null,notes:f.elements.notes.value.trim()||null};
+    if(!row.amazon_fc){say("fcMapMsg","Enter the Amazon FC code.");return;}
+    const {error}=await sb.from("fc_mappings").upsert(row,{onConflict:"amazon_fc"});
+    if(error){say("fcMapMsg",friendlyDbError(error));return;}
+    await audit("fc_mapping_saved","fc_mapping",row);
+    f.reset();say("fcMapMsg","Saved.",true);await loadAll();
+  }
+  async function deleteFcMap(id){
+    if(!canEdit()||!confirm("Remove this FC mapping?"))return;
+    const {error}=await sb.from("fc_mappings").delete().eq("id",id);
+    if(error){say("fcMapMsg",friendlyDbError(error));return;}
+    await audit("fc_mapping_removed","fc_mapping",{id});await loadAll();
+  }
+  // ---------- SAP SCAT: PO upload files built from STR ----------
+  // SCAT-PURE-START
+  const cmpStr=(x,y)=>x<y?-1:x>y?1:0;
+  function scatStockIndex(rows){
+    const bySl=new Map(),byPlant=new Map(),byMat=new Map(),types=new Set();
+    const add=(m,k,t,q)=>{let x=m.get(k);if(!x){x=new Map();m.set(k,x);}x.set(t,(x.get(t)||0)+q);};
+    (rows||[]).forEach(s=>{
+      const mat=String(s.material||"").trim().replace(/^0+/,""),sl=String(s.sloc||"").trim().toUpperCase(),pl=String(s.plant||"").trim().toUpperCase(),t=String(s.valuation_type||"").trim().toUpperCase(),q=Number(s.actual_stock)||0;
+      if(!mat||!t)return;
+      types.add(t);add(bySl,mat+"|"+sl,t,q);if(pl)add(byPlant,mat+"|"+pl,t,q);add(byMat,mat,t,q);
+    });
+    return {bySl,byPlant,byMat,types:[...types].sort()};
+  }
+  function scatPick(m){
+    const arr=[...m.entries()].sort((x,y)=>y[1]-x[1]||cmpStr(x[0],y[0]));
+    const detail=arr.map(([t,q])=>t+" "+q).join(" / ");
+    if(arr.length===1)return {type:arr[0][0],kind:"single",options:[arr[0][0]],detail};
+    const tied=arr.filter(x=>x[1]===arr[0][1]).map(x=>x[0]);
+    if(tied.length>1)return {type:"",kind:"tie",options:tied,detail};
+    return {type:arr[0][0],kind:"max",options:arr.map(x=>x[0]),detail};
+  }
+  function scatValuation(idx,mat,plant,sl,manual){
+    if(manual)return {type:manual,kind:"manual",level:"manual",options:[manual],detail:"chosen by user"};
+    let level="sl",m=idx.bySl.get(mat+"|"+sl);
+    if(!m){level="plant";m=idx.byPlant.get(mat+"|"+plant);}
+    if(!m){level="any";m=idx.byMat.get(mat);}
+    if(!m)return {type:"",kind:"none",level:"none",options:idx.types,detail:"material not in the stock report"};
+    return {...scatPick(m),level};
+  }
+  function scatBuildLine(r,c){
+    const issues=[];
+    const fc=String(r.ship_from_fc||"").trim().toUpperCase();
+    const fm=fc?c.fcMap.get(fc):null;
+    if(!fc)issues.push("Ship-from FC is missing in the STR");
+    else if(!fm||!fm.plant||!fm.sl)issues.push("FC "+fc+" is not in the FC mapping");
+    const mm=c.master(r)||{};
+    let material=String(mm.material_code||"").trim();
+    if(!material&&/^\d{6,}$/.test(String(r.material_code||"").trim()))material=String(r.material_code).trim();
+    if(!material)issues.push("ASIN is not in the product master (no material code)");
+    else if(!/^\d+$/.test(material))issues.push("Product master has a material code that is not a single number ("+material+")");
+    const qty=c.units(r);
+    if(!(qty>0))issues.push("Quantity is zero");
+    const tv=(r.taxable_value===null||r.taxable_value===undefined||r.taxable_value==="")?null:Number(r.taxable_value);
+    if(tv===null||isNaN(tv))issues.push("Taxable value is missing");
+    const value=(tv!==null&&!isNaN(tv)&&qty>0)?Math.round((tv/qty)*100)/100:null;
+    const template=/ACCEPT|APPROV/.test(String(r.irn_status||"").toUpperCase())?"approved":"rejected";
+    const irn=c.irn(r);
+    if(template==="approved"&&!irn)issues.push("IRN status is approved but the IRN number is missing");
+    if(!String(r.invoice_no||"").trim())issues.push("Invoice number is missing");
+    const okMat=material&&/^\d+$/.test(material)&&fm&&fm.plant&&fm.sl;
+    const vt=okMat?scatValuation(c.idx,material.replace(/^0+/,""),fm.plant.toUpperCase(),fm.sl.toUpperCase(),c.manual.get(r.id)||""):{type:"",kind:"none",level:"none",options:c.idx.types,detail:""};
+    if(okMat&&!vt.type)issues.push(vt.kind==="tie"?"Valuation type is tied on stock ("+vt.detail+"). Choose one.":"Material is not in the stock report. Choose a valuation type.");
+    const status=issues.length?"blocked":((vt.level==="plant"||vt.level==="any")?"review":"ok");
+    return {id:r.id,invoice:r.invoice_no||"",invDate:r.invoice_date||"",fc,plant:fm?fm.plant:"",sl:fm?fm.sl:"",material,title:mm.title||"",qty,taxable:tv,value,irnStatus:r.irn_status||"",template,irn,vt:vt.type,vtKind:vt.kind,vtLevel:vt.level,vtOptions:vt.options,vtDetail:vt.detail,issues,status};
+  }
+  function scatPlan(lines){
+    const out={approved:[],rejected:[]};
+    ["approved","rejected"].forEach(t=>{
+      const rows=lines.filter(l=>l.template===t).sort((x,y)=>cmpStr(x.sl,y.sl)||cmpStr(x.invoice,y.invoice)||cmpStr(x.material,y.material)||cmpStr(x.id,y.id));
+      let po=0,item=0,last=null;
+      rows.forEach(l=>{if(l.sl!==last){po++;item=0;last=l.sl;}item+=10;out[t].push({...l,po,item});});
+    });
+    return out;
+  }
+  function scatSheets(plan,shipTo){
+    const A=[["10 20 30","Shipping To","Shipping From",null,null,null,null,null,null,"Shipping to SL",null,"Z103",null,null,"Shipping from",null,null],
+      ["PO_ITEM","PLANT","VENDOR","MATERIAL","QUANTITY","PO_UNIT","TAX_CODE","VAL_TYPE","ItM Cat","Reciving STGE_LOC","BATCH","Condition Type","Value","Unit","Issu STGE_LOC","T.P Inv No","T.P  IRN"]];
+    plan.approved.forEach(l=>A.push([l.item,shipTo.plant,l.plant,Number(l.material),l.qty,"PC",null,l.vt,null,shipTo.storage,null,"Z103",l.value,"INR",l.sl,l.invoice,l.irn]));
+    const R=[["PO_NUMBER","Ship From Plant","Ship TO Plant","PO_ITEM","MATERIAL","QUANTITY","PO_UNIT","VAL_TYPE","Ship to SL","Item Cat","Ship from SL","Invoice no"]];
+    plan.rejected.forEach(l=>R.push([l.po,l.plant,shipTo.plant,l.item,Number(l.material),l.qty,"PC",l.vt,shipTo.storage,null,l.sl,l.invoice]));
+    return {approved:A,rejected:R};
+  }
+  // SCAT-PURE-END
+  const scatManual=new Map(),scatChecked=new Map();let scatCurrent=[];
+  function irnNumberOf(r){const raw=r.raw_data||{};for(const k of Object.keys(raw)){if(String(k).toLowerCase().replace(/[^a-z]/g,"")==="irnnumber"){const v=String(raw[k]??"").trim();if(v)return v;}}return "";}
+  function scatContext(){
+    const fcMap=new Map((cache.fcMappings||[]).map(m=>[String(m.amazon_fc||"").trim().toUpperCase(),{plant:String(m.sap_virtual_plant||"").trim(),sl:String(m.sap_storage_location||"").trim()}]));
+    return {fcMap,idx:scatStockIndex(cache.sapStock),manual:scatManual,master:r=>masterFor(r.sku,null,r.asin),units:unitsOf,irn:irnNumberOf};
+  }
+  function scatExportedMap(){
+    const ex=new Map((cache.scatExports||[]).map(e=>[e.id,e])),m=new Map();
+    (cache.scatLines||[]).forEach(l=>{const e=ex.get(l.export_id),d=String(e?.created_at||l.created_at||""),cur=m.get(l.str_record_id);if(!cur||d>cur.date)m.set(l.str_record_id,{date:d,file:e?.file_name||""});});
+    return m;
+  }
+  function scatIsChecked(l){return scatChecked.has(l.id)?scatChecked.get(l.id):(l.status==="ok"&&!l.exported);}
+  function scatNote(l){
+    if(l.status==="blocked")return l.issues.join("; ");
+    const bits=[];
+    if(l.vtKind==="max")bits.push("Most stock: "+l.vtDetail);
+    if(l.vtLevel==="plant")bits.push("No stock at "+l.sl+"; suggested from plant "+l.plant+" ("+l.vtDetail+"). Please confirm.");
+    if(l.vtLevel==="any")bits.push("No stock at plant "+l.plant+"; suggested from other plants ("+l.vtDetail+"). Please confirm.");
+    if(l.vtKind==="manual")bits.push("Valuation type chosen by you");
+    if(l.exported)bits.push("Exported "+String(l.exported.date).slice(0,10));
+    return bits.join("; ")||"—";
+  }
+  function renderScat(){
+    const page=$("#scatPage");if(!page)return;
+    const manager=canEdit();
+    $("#scatLocked").classList.toggle("hidden",manager);$("#scatBody").classList.toggle("hidden",!manager);
+    if(!manager)return;
+    const stock=cache.sapStock||[];
+    const rd=stock.reduce((acc,s)=>s.report_date>acc?s.report_date:acc,"");
+    const age=rd?Math.floor((Date.now()-new Date(rd+"T00:00:00"))/86400000):null;
+    $("#scatStrip").innerHTML=stock.length?`Stock report: ${esc(stock[0].source_file||"")} · ${fmt(stock.length)} rows · uploaded ${esc(rd)}${age>2?` <span class="tag bad">${age} days old, upload a fresh report</span>`:""} &nbsp;|&nbsp; FC mappings: ${fmt((cache.fcMappings||[]).length)} &nbsp;|&nbsp; Ship-to: ${SAP_SHIP_TO.plant} / ${SAP_SHIP_TO.storage}`:`<span class="tag bad">No SAP stock report uploaded.</span> Upload it in Reports &amp; Imports (SAP stock report). &nbsp;|&nbsp; FC mappings: ${fmt((cache.fcMappings||[]).length)}`;
+    const from=$("#scatFrom").value,to=$("#scatTo").value,tp=$("#scatTemplate").value,show=$("#scatShow").value;
+    const ctx=scatContext(),ex=scatExportedMap();
+    let lines=(cache.str||[]).map(r=>({...scatBuildLine(r,ctx),exported:ex.get(r.id)||null}));
+    lines=lines.filter(l=>(!from||l.invDate>=from)&&(!to||(l.invDate&&l.invDate<=to))&&(tp==="all"||l.template===tp)&&(show==="all"||!l.exported));
+    lines.sort((x,y)=>cmpStr(y.invDate,x.invDate)||cmpStr(x.invoice,y.invoice));
+    scatCurrent=lines;
+    const cnt=s=>lines.filter(l=>l.status===s).length;
+    $("#scatSummary").innerHTML=`<div class="kpi-grid compact"><article class="kpi"><span>Ready</span><b>${fmt(cnt("ok"))}</b><small>All fields filled</small></article><article class="kpi"><span>Review</span><b>${fmt(cnt("review"))}</b><small>Valuation type suggested, please confirm</small></article><article class="kpi"><span>Blocked</span><b>${fmt(cnt("blocked"))}</b><small>Fix the reason shown, then they can be exported</small></article></div>`;
+    $("#scatTable tbody").innerHTML=lines.map(l=>{
+      const opts=[...new Set([l.vt,...l.vtOptions].filter(Boolean))];
+      const sel=`<select data-scat-vt="${esc(l.id)}">${l.vt?"":'<option value="">Choose…</option>'}${opts.map(o=>`<option ${o===l.vt?"selected":""}>${esc(o)}</option>`).join("")}</select>`;
+      const tag=l.status==="ok"?"ok":l.status==="review"?"warn":"bad";
+      return `<tr><td><input type="checkbox" data-scat-check="${esc(l.id)}" ${l.status==="blocked"?"disabled":""} ${scatIsChecked(l)&&l.status!=="blocked"?"checked":""}></td><td>${esc(l.invoice||"—")}</td><td>${esc(l.invDate||"—")}</td><td>${esc(l.fc||"—")}</td><td>${esc(l.plant||"—")}</td><td>${esc(l.sl||"—")}</td><td>${esc(l.material||"—")}</td><td>${esc(l.title||"—")}</td><td>${fmt(l.qty)}</td><td>${l.taxable==null?"—":fmt(l.taxable)}</td><td>${l.value==null?"—":l.value.toFixed(2)}</td><td>${sel}</td><td>${esc(l.irnStatus||"Blank")}</td><td>${l.template==="approved"?"Govt Approved":"Govt Rejected / Blank"}</td><td><span class="tag ${tag}">${l.status==="ok"?"Ready":l.status==="review"?"Review":"Blocked"}</span></td><td style="white-space:normal;min-width:260px">${esc(scatNote(l))}</td></tr>`;
+    }).join("")||emptyRow(16);
+    enhanceTable("scatTable");freezeAll();updateScatSel();
+    const exps=[...(cache.scatExports||[])].sort((x,y)=>String(y.created_at).localeCompare(String(x.created_at)));
+    $("#scatHistory tbody").innerHTML=exps.map(e=>`<tr><td>${esc(String(e.created_at||"").slice(0,16).replace("T"," "))}</td><td>${e.template==="approved"?"Govt Approved":"Govt Rejected / Blank"}</td><td>${esc(e.file_name)}</td><td>${fmt(e.line_count)}</td><td>${fmt(e.total_qty)}</td></tr>`).join("")||emptyRow(5);
+  }
+  function updateScatSel(){const n=scatCurrent.filter(l=>l.status!=="blocked"&&scatIsChecked(l)).length;const el=$("#scatSelCount");if(el)el.textContent=`${n} line(s) selected`;}
+  async function scatGenerate(){
+    if(!canEdit()){say("scatMsg","Only a manager or admin can generate SCAT files.");return;}
+    const lines=scatCurrent.filter(l=>l.status!=="blocked"&&scatIsChecked(l));
+    if(!lines.length){say("scatMsg","Select at least one line that is not blocked.");return;}
+    const plan=scatPlan(lines),sheets=scatSheets(plan,SAP_SHIP_TO);
+    const d=new Date(),stamp=`${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}_${String(d.getHours()).padStart(2,"0")}${String(d.getMinutes()).padStart(2,"0")}`;
+    const files=[];
+    if(plan.approved.length)files.push({t:"approved",name:`SCAT_Govt_Approved_${stamp}.xlsx`,aoa:sheets.approved,rows:plan.approved});
+    if(plan.rejected.length)files.push({t:"rejected",name:`SCAT_Govt_Rejected_Blank_${stamp}.xlsx`,aoa:sheets.rejected,rows:plan.rejected});
+    say("scatMsg","Saving the export record...",true);
+    for(const f of files){
+      const {data:eh,error:ee}=await sb.from("scat_exports").insert({template:f.t,file_name:f.name,line_count:f.rows.length,total_qty:f.rows.reduce((acc,l)=>acc+l.qty,0)}).select("id");
+      if(ee||!eh?.length){say("scatMsg","Export record was not saved, so no file was created: "+friendlyDbError(ee||"no id returned"));return;}
+      f.exportId=eh[0].id;
+      const {error:le}=await sb.from("scat_export_lines").insert(f.rows.map(l=>({export_id:f.exportId,str_record_id:l.id,invoice_no:l.invoice,material:l.material,qty:l.qty,value:l.value,val_type:l.vt,val_source:l.vtLevel==="sl"?l.vtKind:l.vtLevel,ship_from_fc:l.fc,ship_from_plant:l.plant,ship_from_sl:l.sl,po_group:l.po,po_item:l.item})));
+      if(le){say("scatMsg","Export lines were not saved, so no file was created: "+friendlyDbError(le));return;}
+    }
+    const X=window.XLSX||await ensureXLSX();
+    files.forEach((f,i)=>setTimeout(()=>{const wb=X.utils.book_new();X.utils.book_append_sheet(wb,X.utils.aoa_to_sheet(f.aoa),"Sheet1");X.writeFile(wb,f.name);},i*600));
+    await audit("scat_generated","scat_export",{files:files.map(f=>f.name),lines:lines.length});
+    say("scatMsg",`${files.length} file(s) created with ${lines.length} line(s). If only one downloaded, allow multiple downloads in your browser.`,true);
+    lines.forEach(l=>scatChecked.delete(l.id));
+    await loadAll();
+  }
+  function bindScat(){
+    ["scatFrom","scatTo","scatTemplate","scatShow"].forEach(id=>{$("#"+id).onchange=renderScat;});
+    $("#scatGenerate").onclick=scatGenerate;
+    $("#scatSelectReady").onclick=()=>{scatCurrent.forEach(l=>{if(l.status!=="blocked")scatChecked.set(l.id,true);});renderScat();};
+    $("#scatClear").onclick=()=>{scatCurrent.forEach(l=>scatChecked.set(l.id,false));renderScat();};
+    $("#scatTable").addEventListener("change",e=>{
+      const c=e.target.closest&&e.target.closest("[data-scat-check]");
+      if(c){scatChecked.set(c.dataset.scatCheck,c.checked);updateScatSel();return;}
+      const s=e.target.closest&&e.target.closest("[data-scat-vt]");
+      if(s){if(s.value)scatManual.set(s.dataset.scatVt,s.value);else scatManual.delete(s.dataset.scatVt);renderScat();}
+    });
+  }
+  // ---------- SAP stock report upload (valuation type source) ----------
+  async function importStock(rows,file){
+    if(!canEdit())throw new Error("Only a manager or admin can upload the SAP stock report.");
+    const first=rows[0]||{},keys=Object.keys(first).map(k=>k.trim().toLowerCase());
+    for(const need of ["material code","plant","valuation type","st. loc","actual stock"])if(!keys.includes(need))throw new Error('This does not look like the SAP stock report. Column "'+need+'" was not found.');
+    const g=(r,k)=>{const v=r[k];return v===undefined||v===null?"":String(v).trim();};
+    const uploadId=crypto.randomUUID(),reportDate=today(),recs=[];let skipped=0;
+    rows.forEach(r0=>{
+      const r={};Object.keys(r0).forEach(k=>r[k.trim().toLowerCase()]=r0[k]);
+      const material=g(r,"material code").replace(/^0+/,""),sloc=g(r,"st. loc").toUpperCase(),vt=g(r,"valuation type").toUpperCase();
+      if(!material||!sloc||!vt){skipped++;return;}
+      recs.push({material,plant:g(r,"plant").toUpperCase()||null,sloc,valuation_type:vt,batch:g(r,"batch number")||null,actual_stock:num(g(r,"actual stock")),report_date:reportDate,source_file:file.name,upload_id:uploadId});
+    });
+    if(!recs.length)throw new Error("No usable rows were found in the stock report.");
+    for(let i=0;i<recs.length;i+=500){
+      const {error}=await sb.from("sap_stock").insert(recs.slice(i,i+500));
+      if(error){await sb.from("sap_stock").delete().eq("upload_id",uploadId);throw new Error("Stock report was not saved: "+friendlyDbError(error));}
+    }
+    const {error:de}=await sb.from("sap_stock").delete().neq("upload_id",uploadId);
+    if(de)throw new Error("The new stock report was saved, but the old one could not be removed: "+friendlyDbError(de));
+    await audit("stock_report_uploaded","sap_stock",{file:file.name,rows:recs.length,skipped});
+    await addImport(file,"sap_stock_report",rows.length,recs.length);
+    return {accepted:recs.length,skipped};
+  }
+  // ---------- Evidence (photos and videos) for damaged, short and not received stock ----------
+  const EVIDENCE_MAX_MB={image:10,video:30};
+  let evidenceCtx=null;
+  function evidenceFor(shipmentId){return (cache.evidence||[]).filter(e=>e.shipment_line_id===shipmentId);}
+  function evidenceNeeded(r){return num(r.damaged_qty)+num(r.short_qty)+num(r.not_received_qty)>0;}
+  function checkEvidenceFiles(files){
+    const errs=[];
+    [...files].forEach(f=>{const kind=String(f.type).startsWith("image/")?"image":String(f.type).startsWith("video/")?"video":null;if(!kind){errs.push(f.name+": only photos and videos are allowed");return;}if(f.size>EVIDENCE_MAX_MB[kind]*1048576)errs.push(f.name+": larger than "+EVIDENCE_MAX_MB[kind]+" MB");});
+    return errs;
+  }
+  async function uploadEvidence(shipmentId,files){
+    const errs=[];let ok=0;
+    for(const f of files){
+      const p=`${shipmentId}/${Date.now()}_${f.name.replace(/[^\w.\-]/g,"_")}`;
+      const {error:ue}=await sb.storage.from("receipt-evidence").upload(p,f,{contentType:f.type});
+      if(ue){errs.push(f.name+": "+friendlyDbError(ue));continue;}
+      const {error:ie}=await sb.from("receipt_evidence").insert({shipment_line_id:shipmentId,file_path:p,file_name:f.name,mime_type:f.type,size_bytes:f.size});
+      if(ie){errs.push(f.name+": "+friendlyDbError(ie));continue;}
+      ok++;
+    }
+    if(ok)await audit("evidence_uploaded","receipt_evidence",{shipment_line_id:shipmentId,files:ok});
+    return {ok,errs};
+  }
+  function renderEvidenceList(){
+    const list=evidenceFor(evidenceCtx);
+    $("#evidenceList").innerHTML=list.length?list.map(e=>`<div style="display:flex;gap:8px;align-items:center;margin:6px 0"><span style="flex:1">${esc(e.file_name)} <small class="muted">${esc(String(e.created_at||"").slice(0,10))}</small></span><button type="button" class="secondary" data-evidence-view="${esc(e.id)}">View</button></div>`).join(""):'<p class="muted">No evidence uploaded yet.</p>';
+  }
+  function openEvidence(shipmentId){
+    evidenceCtx=shipmentId;
+    const s=(cache.shipments||[]).find(x=>x.id===shipmentId)||{};
+    $("#evidenceTitle").textContent=`${s.order_id||""} · ${s.tracking_number||""} · ${s.sku||""}`;
+    $("#evidenceFile").value="";say("evidenceMsg","");renderEvidenceList();
+    $("#evidenceModal").classList.remove("hidden");
+  }
+  async function viewEvidence(id){
+    const e=(cache.evidence||[]).find(x=>x.id===id);if(!e)return;
+    const {data,error}=await sb.storage.from("receipt-evidence").createSignedUrl(e.file_path,600);
+    if(error){alert(friendlyDbError(error));return;}
+    window.open(data.signedUrl,"_blank","noopener");
+  }
+  function bindEvidence(){
+    $("#receiptLineEditor").addEventListener("input",e=>{
+      const q=e.target.closest&&e.target.closest("[data-qty]");if(!q)return;
+      const line=q.closest(".receipt-line");if(!line)return;
+      const v=k=>num(line.querySelector(`[data-qty="${k}"]`)?.value);
+      line.querySelector("[data-evidence-row]")?.classList.toggle("hidden",!(v("damaged_qty")+v("short_qty")+v("not_received_qty")>0));
+    });
+    $("#evidenceClose").onclick=()=>$("#evidenceModal").classList.add("hidden");
+    $("#evidenceUpload").onclick=async()=>{
+      const files=$("#evidenceFile").files;
+      if(!files.length){say("evidenceMsg","Choose at least one photo or video.");return;}
+      const errs=checkEvidenceFiles(files);if(errs.length){say("evidenceMsg",errs.join("\n"));return;}
+      say("evidenceMsg","Uploading...",true);
+      const r=await uploadEvidence(evidenceCtx,files);
+      say("evidenceMsg",r.errs.length?`${r.ok} uploaded. Problems: ${r.errs.join(" | ")}`:`${r.ok} file(s) uploaded.`,!r.errs.length);
+      await loadAll();renderEvidenceList();$("#evidenceFile").value="";
+    };
+    $("#evidenceList").onclick=e=>{const b=e.target.closest&&e.target.closest("[data-evidence-view]");if(b)viewEvidence(b.dataset.evidenceView);};
+    $("#receiptEntriesTable").addEventListener("click",e=>{const b=e.target.closest&&e.target.closest("[data-evidence-open]");if(b)openEvidence(b.dataset.evidenceOpen);});
+  }
+  const COURIER_TRACK_PAGES={BLUEDART:{base:"https://www.bluedart.com/home",direct:false},DLV:{base:"https://www.delhivery.com/track-v2/package/",direct:true}};
   function courierPageFor(carrier){const c=String(carrier||"").toUpperCase();if(c.includes("BLUEDART")||c.includes("BLUE_DART"))return COURIER_TRACK_PAGES.BLUEDART;if(c.includes("DLV"))return COURIER_TRACK_PAGES.DLV;return null;}
   async function trackShipment(tracking,carrier){
     try{await navigator.clipboard.writeText(String(tracking));}catch(_){}
