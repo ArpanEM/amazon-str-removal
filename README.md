@@ -2,7 +2,7 @@
 
 A static web app (GitHub Pages) with a Supabase database. It reconciles Amazon STR, SAP posting, Amazon removal invoices, shipments and warehouse receipts, and prepares the SAP SCAT upload files.
 
-Stack: HTML, CSS and JavaScript (no build step), Supabase (database, login, file storage), Google Apps Script (approval mail, free).
+Stack: HTML, CSS and JavaScript (no build step) and Supabase (database, login, file storage). Approval mails are prepared in Outlook.
 
 ## Files
 
@@ -12,7 +12,6 @@ Stack: HTML, CSS and JavaScript (no build step), Supabase (database, login, file
 | `config.js` | Your Supabase URL and anon key. Keep your existing file. Never put the `service_role` key here |
 | `assets/` | Emami logo files |
 | `templates/` | Import templates |
-| `apps_script/mailer.gs` | Approval mail and 2-day follow-up (runs in your Google account) |
 | `sql/already_applied/` | Original schema and earlier scripts. **Do not run again** |
 | `sql/` (numbered) | Scripts to run in order, once each |
 
@@ -38,6 +37,7 @@ Run in **Supabase > SQL Editor**, one file at a time, in this order. Skip any yo
 | 14 | `fc_mapping_seed.sql` | Loads your 23 FC mappings |
 | 15 | `scat_setup.sql` | SAP stock report and SCAT export log |
 | 16 | `evidence_setup.sql` | Photo and video evidence storage |
+| 17 | `material_cogs_outlook_setup.sql` | SAP description, COGS, Outlook approval flow |
 
 After the last script, run `notify pgrst, 'reload schema';` once.
 
@@ -64,7 +64,8 @@ Employees > Page access (admin only) sets which pages each user can open. A user
 
 **Imports (Reports & Imports).** STR report (Amazon dump), STR master (SAP-processed), Removal Shipment Detail, Product Mapping Master, SAP stock report, invoice ZIP files. Uploading the same file again does not duplicate rows. The Removal Order report is no longer shown.
 
-**Product master.** Edit, add or remove products in the app. Mark products you no longer sell as Inactive instead of deleting them.
+**Product master.** Columns: ASIN, SKU, FNSKU, Material Code, Product Title, **SAP Description**, Pack Of, MRP and **COGS** (per unit). Edit, add or remove products in the app, or upload the file. Mark products you no longer sell as Inactive instead of deleting them.
+Use the exact headers `SAP Description` and `COGS` in the upload file. Every working screen shows the **SAP material** and **SAP description** from this master, not the ASIN, SKU, FNSKU or Amazon title. If a product has no SAP description yet, the Amazon title is shown until you fill it in.
 
 **Amazon FC to SAP location.** Reports & Imports lists each FC with its SAP virtual plant and storage location. Ship-to is fixed: plant DP50, storage location ED01.
 
@@ -83,16 +84,14 @@ Employees > Page access (admin only) sets which pages each user can open. A user
 Warehouse Excel upload reads the PHY DATA sheet. Re-uploading updates rows from that file and keeps rows you edited by hand.
 Limits: photos 10 MB, videos 30 MB. Only managers and warehouse users can open evidence files.
 
-**Approvals** (managers and admins). Damaged, Expired and Near Expiry lines with quantity and value (quantity x MRP) are mailed to the Ecom team. They reply by mail. Record the decision and upload the approval screenshot. Approved needs a screenshot. If there is no decision after 2 days, a follow-up mail is sent automatically, up to 3 times.
-Sender name, To, CC and mailer details are remembered from the last mail.
-
-**Apps Script mailer setup.**
-1. script.google.com > New project, paste `apps_script/mailer.gs`.
-2. Project Settings > Script properties: add `SUPABASE_URL`, `SUPABASE_SERVICE_KEY` (service role key, kept only here) and `MAILER_TOKEN` (any long private text).
-3. Deploy > New deployment > Web app: Execute as Me, access Anyone. Copy the URL.
-4. Triggers > Add trigger > `sendFollowUps` > Time-driven > Day timer.
-5. In the app (Approvals) enter the URL and the same token.
-Mail goes from the Google account that owns the script. Free accounts have a daily sending limit.
+**Approvals** (managers and admins). Damaged, Expired and Near Expiry lines are listed with quantity, MRP value (quantity x MRP) and COGS value (quantity x COGS). A product without COGS shows "-" and is left out of the COGS total.
+1. Enter the name for "Dear", To and CC. They are remembered for the next mail. Tick the lines and click **Prepare mail**.
+2. The table is copied and Outlook opens with To, CC and subject. Click in the message, press **Ctrl+V**, check the addresses, and send. Choose "Outlook desktop app" or "Outlook on the web" in Open in.
+3. If To or CC are empty in Outlook, use the Copy To, Copy CC, Copy subject and Copy table buttons.
+4. Click **Mark as sent** in the list. Use Cancel to free the lines again if you did not send.
+5. The Ecom team replies by mail. Click **Record decision**, enter the approver name and date, and upload the screenshot of the reply. Approved needs a screenshot.
+6. If there is no decision after 2 days the row shows Follow-up due. Click **Prepare follow-up**, send it in Outlook, then click **Follow-up sent**.
+The app cannot send mail itself. The mail is sent from your own Outlook and stays in your Sent Items. The fortnightly mail is also manual: the page shows when the next one is due.
 
 **Reconciliation.** One row per removal order and product: invoice, STR units, SAP references, shipped units, returned to Amazon, expected at warehouse, received, short, pending, tracking, fee and batches. Amazon "Delivered" does not mean received at the warehouse.
 
@@ -119,6 +118,6 @@ Not yet tested end to end on your live Supabase project. Test with one admin, on
 - Shipment re-upload gives no duplicates.
 - A receipt over the shipped quantity is refused. Damaged without a photo is refused.
 - SAP stock upload replaces the old one. SCAT files open with the same columns as your templates.
-- Approval mail arrives with your sender name, CC works, the follow-up arrives after 2 days.
+- Prepare mail copies the table, Outlook opens with the right To and subject, and the pasted table shows MRP and COGS values.
 - A warehouse user sees only Warehouse Receipts. An employee cannot edit or delete.
 - Audit log shows inserts, updates and deletes.
